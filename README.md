@@ -20,7 +20,7 @@ cd ./WorkingArea
 cmsrel CMSSW_5_3_32
 cd ./CMSSW_5_3_32/src
 cmsenv
-git clone https://github.com/zenaiev/2011-doubleelectron-doublemu-mueg-ttbar.git
+git clone https://github.com/zenaiev/2011-ttbar.git
 git checkout 2024
 scram b
 cd 2011-doubleelectron-doublemu-mueg-ttbar/Analyzer
