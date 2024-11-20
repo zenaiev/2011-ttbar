@@ -1,0 +1,1 @@
+root://eospublic.cern.ch//eos/opendata/cms/Run2011A/MuEG/AOD/12Oct2013-v1/20000/003DD74E-653E-E311-9F63-002590494D18.root
