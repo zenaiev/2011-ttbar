@@ -245,9 +245,11 @@ int main(int argc, char** argv)
     // (channel code is: c1 ee, c2 mumu, c3 emu) 
     c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.eps", plotDir.Data(), ch));
     c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.pdf", plotDir.Data(), ch));
+    c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.png", plotDir.Data(), ch));
   }
   c_cp[0]->SaveAs(TString::Format("%s/cp.eps", plotDir.Data()));
   c_cp[0]->SaveAs(TString::Format("%s/cp.pdf", plotDir.Data()));
+  c_cp[0]->SaveAs(TString::Format("%s/cp.png", plotDir.Data()));
   //
   // be aware: there are certainly memory leaks (not removing 
   // dynamically allocated objects), although it does not matter here, 

@@ -250,4 +250,5 @@ void PlotCS(const ZPlotCSInput& in)
   TString name = TString::Format("%s/cs%s", in.plotDir.Data(), (in.Norm) ? "_norm" : "");
   c_cs->SaveAs(name + ".eps");
   c_cs->SaveAs(name + ".pdf");
+  c_cs->SaveAs(name + ".png");
 }
