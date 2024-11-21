@@ -230,7 +230,7 @@ void eventreco(ZEventRecoInput in)
   // event counters
   long nSel = 0;
   long nReco = 0;
-  int nGen = 0;
+  long nGen = 0;
   
   // histograms for kinematic reconstruction debugging
   // (not needed in physics analysis, not stored)
