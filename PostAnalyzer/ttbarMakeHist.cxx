@@ -24,12 +24,12 @@ int main(int argc, char** argv)
   TString mcDir = gMcDir;
   //
   // flags what to run
-  bool flagData    = 1; // if 1, data will be processed
+  bool flagData    = 0; // if 1, data will be processed
   bool flagMCsig   = 1; // if 1, signal MC (dileptonic decay channel) will be processed
-  bool flagMCother = 1; // if 1, signal MC 'other' decay channels will be processed to form background MC histograms
-  bool flagMCstop  = 1; // if 1, MC single top (background) will be processed
-  bool flagMCwjets = 1; // if 1, MC W+jets (background) will be processed
-  bool flagMCdy    = 1; // if 1, MC Drell-Yan (background) will be processed
+  bool flagMCother = 0; // if 1, signal MC 'other' decay channels will be processed to form background MC histograms
+  bool flagMCstop  = 0; // if 1, MC single top (background) will be processed
+  bool flagMCwjets = 0; // if 1, MC W+jets (background) will be processed
+  bool flagMCdy    = 0; // if 1, MC Drell-Yan (background) will be processed
   //
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   //
@@ -84,7 +84,8 @@ int main(int argc, char** argv)
   vecVH.push_back(ZVarHisto("ptl", new TH1D("h_ptl", "pT leptons", 23, 30.0, 260.0)));
   
   // loop over decay channels (ch = 1 ee, ch = 2 mumu, ch = 3 emu)
-  for(int ch = 1; ch <= 3; ch++)
+  //for(int ch = 1; ch <= 3; ch++)
+  for(int ch = 1; ch <= 1; ch++)
   {
     //if(ch != 3) continue; // if you need only emu (for test purpose e.g.)
     // 
@@ -146,7 +147,7 @@ int main(int argc, char** argv)
       in.AddToChain(mcDir + "/TTJets_TuneZ2_7TeV-madgraph-tauola/010001/*.root");
       in.AddToChain(mcDir + "/TTJets_TuneZ2_7TeV-madgraph-tauola/00000/*.root");
       eventreco(in);
-      // MC ttbar other (background): re-use existing ZEventRecoInput, just change type
+      /*// MC ttbar other (background): re-use existing ZEventRecoInput, just change type
       in.Name = "mcSigOtherReco";
       in.Type = 3;
       eventreco(in);
@@ -155,7 +156,7 @@ int main(int argc, char** argv)
       in.Type = 2;
       in.VecVarHisto = vecVHGen;
       in.Gen = true; // flag to notify that generator level should be processed
-      eventreco(in);
+      eventreco(in);*/
     }
     // *****************************************
     // ************ MC single top **************

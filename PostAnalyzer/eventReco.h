@@ -16,6 +16,12 @@
 #include <TCanvas.h>
 #include <TFile.h>
 
+// FULL KINEMATIC RECONSTRUCTION
+#include "fkr/KinematicReconstruction.h"
+#include "fkr/KinematicReconstructionSolution.h"
+#include "fkr/KinematicReconstruction_LSroutines.h"
+#include "fkr/analysisUtils.h"
+
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -237,6 +243,15 @@ void eventreco(ZEventRecoInput in)
   TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
   TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
 
+  KinematicReconstruction* kinReco = nullptr;
+  bool flag_fkr = 1;
+  if (flag_fkr) {
+    //double TopMASS = 172.5;
+    int minBTag = 1;
+    bool preferBtags = true;
+    kinReco = new KinematicReconstruction("fkr/KinRecoInput.root", minBTag, preferBtags);  
+  }
+
   // determine number of events
   long nEvents = chain->GetEntries();
   //limit it if exceeds the specified maximum number
@@ -379,6 +394,50 @@ void eventreco(ZEventRecoInput in)
     // returned status is 1 for successfull kinreco, 0 otherwise
     // t, tbar are vectors with single "best" solution (if kinreco was successfull)
     //printf("STATUS: %d\n", status);
+    // FULL KINEMATIC RECONSTRUCTION
+    double mtt_fkr = -1.;
+    if (flag_fkr) {
+      VLV leptons = {common::TLVtoLV(vecLepM), common::TLVtoLV(vecLepP)};
+      std::vector<int> krLepInd = { 0 };
+      std::vector<int> krAntiLepInd = { 1 };
+      std::vector<int> krJetInd;
+      std::vector<int> krBJetInd;
+      VLV jets;
+      std::vector<double> btags;
+      for(int j = 0; j < vecJets.size(); j++) 
+      {
+        jets.push_back(common::TLVtoLV(vecJets[j]));
+        btags.push_back(preselTree->jetBTagDiscr[j]);
+        krJetInd.push_back(j);
+        if(preselTree->jetBTagDiscr[j] > bTagDiscrL)
+          krBJetInd.push_back(j);
+      }
+      TLorentzVector met;
+      met.SetPx(preselTree->metPx);
+      met.SetPy(preselTree->metPy);
+      KinematicReconstructionSolutions krSolutions = kinReco->solutions(krLepInd, krAntiLepInd, krJetInd, krBJetInd, leptons, jets, btags, common::TLVtoLV(met));
+      bool flagPassedKinRec = krSolutions.numberOfSolutions();
+      //if(flagPassedKinRec == 0)
+      //  continue;
+      //printf("classic: %d %f %f %f %f %f %f\n", krSolutions.numberOfSolutions(),
+      //       krSolutions.solution().neutrino().Px(), krSolutions.solution().neutrino().Py(), krSolutions.solution().neutrino().Pz(),
+      //       krSolutions.solution().antiNeutrino().Px(), krSolutions.solution().antiNeutrino().Py(), krSolutions.solution().antiNeutrino().Pz());
+  
+      if(flagPassedKinRec)
+      {
+        TLorentzVector t_fkr = common::LVtoTLV(krSolutions.solution().top());
+        TLorentzVector tbar_fkr = common::LVtoTLV(krSolutions.solution().antiTop());
+        mtt_fkr = (t_fkr + tbar_fkr).M();
+      }
+      if (1==1) {
+        // print results vs generator level
+        double mtt_skr = status ? (t+tbar).M() : -1.;
+        TLorentzVector t_gen, tbar_gen;
+        t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
+        tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
+        printf("%f %f %f\n", (t_gen+tbar_gen).M(), mtt_skr, mtt_fkr);
+      }
+    }
     if(status > 0) // successfull kinreco
     {
       // print the top and antitop momenta, if needed
