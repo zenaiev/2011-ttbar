@@ -107,17 +107,6 @@ bin_centers_mtt_lkr, eff_mtt_lkr, eff_unc_mtt_lkr, bias_mtt_lkr, bias_unc_mtt_lk
 bin_centers_pttt_lkr, eff_pttt_lkr, eff_unc_pttt_lkr, bias_pttt_lkr, bias_unc_pttt_lkr, resol_pttt_lkr, resol_unc_pttt_lkr = calculate_efficiency(pttt_lkr, pttt_gen, pttt_bins)
 bin_centers_ytt_lkr, eff_ytt_lkr, eff_unc_ytt_lkr, bias_ytt_lkr, bias_unc_ytt_lkr, resol_ytt_lkr, resol_unc_ytt_lkr = calculate_efficiency(ytt_lkr, ytt_gen, ytt_bins)
 
-# не довіряємо похибкам для роздільної здатності, не показуєм їх на малюнках
-#resol_unc_mtt_fkr = None
-#resol_unc_pttt_fkr = None
-#resol_unc_ytt_fkr = None
-#resol_unc_mtt_skr = None
-#resol_unc_pttt_skr = None
-#resol_unc_ytt_skr = None
-#resol_unc_mtt_lkr = None
-#resol_unc_pttt_lkr = None
-#resol_unc_ytt_lkr = None
-
 # Plotting
 fig, axs = plt.subplots(3, 3, figsize=(15, 12))
 
