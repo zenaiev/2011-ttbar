@@ -1,14 +1,3 @@
-TLorentzVector ConstrainM(const TLorentzVector& lv, const double m)
-{
-  if(lv.M() > m)
-    throw(std::logic_error("Error in ZNtupleAnalysis::ConstrainM(): lv.M() = %f > %f = m"), lv.M(), m);
-  const double eNew = TMath::Sqrt(m * m + lv.Perp2()) * TMath::CosH(lv.Rapidity());
-  const double zNew =eNew * TMath::TanH(lv.Rapidity());
-  TLorentzVector lvNew(lv.X(), lv.Y(), zNew, eNew);
-  assert(TMath::Abs(lvNew.M() - m) < 0.1);
-  return lvNew;
-}
-
 
 TLorentzVector LooseKinReco(const TLorentzVector& lepton, const TLorentzVector& antilepton,
                                            const TLorentzVector& bjet, const TLorentzVector& bbarjet,
