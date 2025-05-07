@@ -74,7 +74,6 @@ def calculate_efficiency(reco, gen, bins):
         else:
             efficiency.append(rec_events / events_gen)
             # похибка дорівнює sqrt(E*(1-E)/N_gen), E=N_rec/N-gen
-            # delta_E = 
             efficiency_unc.append(np.sqrt(efficiency[-1]*(1-efficiency[-1])/events_gen))
             # рахуємо зсув (bias): bias = sum(rec-gen)/N
             # N це кількість вдало реконструйованих подій (використовуємо лише їх)
