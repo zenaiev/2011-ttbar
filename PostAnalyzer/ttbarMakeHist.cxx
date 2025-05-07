@@ -84,8 +84,8 @@ int main(int argc, char** argv)
   vecVH.push_back(ZVarHisto("ptl", new TH1D("h_ptl", "pT leptons", 23, 30.0, 260.0)));
   
   // loop over decay channels (ch = 1 ee, ch = 2 mumu, ch = 3 emu)
-  //for(int ch = 1; ch <= 3; ch++)
-  for(int ch = 1; ch <= 1; ch++)
+  for(int ch = 1; ch <= 3; ch++)
+  //for(int ch = 3; ch <= 3; ch++)
   {
     //if(ch != 3) continue; // if you need only emu (for test purpose e.g.)
     // 

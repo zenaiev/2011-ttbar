@@ -261,7 +261,7 @@ void eventreco(ZEventRecoInput in)
   if(nEvents > in.MaxNEvents)
     nEvents = in.MaxNEvents;
   printf("nEvents: %ld\n", nEvents);
-  TFile *outputFile = new TFile("ttbar_output.root", "RECREATE");
+  TFile *outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
   TTree *tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
     float mtt_fkr;
     float mtt_lkr;
@@ -427,12 +427,13 @@ void eventreco(ZEventRecoInput in)
     // t, tbar are vectors with single "best" solution (if kinreco was successfull)
     //printf("STATUS: %d\n", status);
     // FULL KINEMATIC RECONSTRUCTION
-    mtt_fkr = -1.;
-    mtt_lkr = -1.;
-    ytt_fkr = -1.;
-    ytt_lkr = -1.;
-    pttt_fkr = -1.;
-    pttt_lkr = -1.;
+    // initialised by -1000 (this default value remains if not correctly reconstructed later)
+    mtt_fkr = -1000.;
+    mtt_lkr = -1000.;
+    ytt_fkr = -1000.;
+    ytt_lkr = -1000.;
+    pttt_fkr = -1000.;
+    pttt_lkr = -1000.;
     if (flag_fkr) {
       VLV leptons = {common::TLVtoLV(vecLepM), common::TLVtoLV(vecLepP)};
       std::vector<int> krLepInd = { 0 };
@@ -470,23 +471,52 @@ void eventreco(ZEventRecoInput in)
       }
       if (1==1) {
         // print results vs generator level
-        mtt_skr = status ? (t+tbar).M() : -1.;
-        ytt_skr = status ? (t+tbar).Rapidity() : -1.;
-        pttt_skr = status ? (t+tbar).Pt() : -1.;
+        // -1000 if not reconstructed
+        mtt_skr = status ? (t+tbar).M() : -1000.;
+        ytt_skr = status ? (t+tbar).Rapidity() : -1000.;
+        pttt_skr = status ? (t+tbar).Pt() : -1000.;
         TLorentzVector t_gen, tbar_gen;
         t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
         tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
-        printf("%f %f %f\n", (t_gen+tbar_gen).M(), mtt_skr, mtt_fkr);
 
       }
     }
     if(flag_lkr){
-
-      TLorentzVector ttbar= LooseKinReco(vecLepM, vecLepP,vecJets[0],vecJets[1],preselTree->metPx, preselTree->metPy);
-      mtt_lkr = ttbar.M();
-      ytt_lkr = ttbar.Rapidity();
-      pttt_lkr = ttbar.Pt();
-
+      // find best jets: prefer b-tagged jets, among those with equal b-ta number prefer jets with the highest sum of pT, require M(lb) < 180 GeV
+      int bTagBest = 0;
+      float pTSumBest = 0;
+      TLorentzVector jetBest1, jetBest2;
+      for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++)
+      {
+        if((*jet1+vecLepM).M() > 180 && (*jet1+vecLepP).M() > 180) continue;
+        for(std::vector<TLorentzVector>::const_iterator jet2 = vecJets.begin(); jet2 != vecJets.end(); jet2++)
+        {
+          if((*jet2+vecLepM).M() > 180 && (*jet2+vecLepP).M() > 180) continue;
+          // skip same jets
+          if(jet1 == jet2) continue;
+          // for this pair of jets, calculate number of b-tagged jets,
+          // b-tagged jets are provided with negative masses (see selection.h)
+          int bTag = int(jet1->M() < 0) + int(jet2->M() < 0);
+          if(bTag < bTagBest) continue;
+          // need to reset the best pT sum to 0 if we found a higher b-tag category
+          if(bTag > bTagBest) pTSumBest = 0.;
+          bTagBest = bTag;
+          // calculate the sum of pT
+          float pTSum = jet1->Pt() + jet2->Pt();
+          if(pTSum < pTSumBest) continue;
+          pTSumBest = pTSum;
+          // store these jets
+          if(jet1->M() < 0) jetBest1.SetPtEtaPhiM(jet1->Pt(), jet1->Eta(), jet1->Phi(), -1 * jet1->M());
+          jetBest1 = *jet1;
+          if(jet2->M() < 0) jetBest2.SetPtEtaPhiM(jet2->Pt(), jet2->Eta(), jet2->Phi(), -1 * jet2->M());
+          else jetBest2 = *jet2;
+          // get solution
+          TLorentzVector ttbar= LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
+          mtt_lkr = ttbar.M();
+          ytt_lkr = ttbar.Rapidity();
+          pttt_lkr = ttbar.Pt();
+        }
+      }
     }
     TLorentzVector t_gen, tbar_gen;
     t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
