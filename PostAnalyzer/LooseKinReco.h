@@ -22,7 +22,7 @@ TLorentzVector LooseKinReco(const TLorentzVector& lepton, const TLorentzVector& 
   TLorentzVector llnn = llbar + nunubar;
   const double mw = 80.4;
   if(llnn.M() < (2.0 * mw)) {
-    const double eNew = TMath::Sqrt(mw * mw + llnn.Perp2()) * TMath::CosH(llnn.Rapidity());
+    const double eNew = TMath::Sqrt(4 * mw * mw + llnn.Perp2()) * TMath::CosH(llnn.Rapidity());
     const double zNew =eNew * TMath::TanH(llnn.Rapidity());
     llnn = TLorentzVector(llnn.X(), llnn.Y(), zNew, eNew);
   }
