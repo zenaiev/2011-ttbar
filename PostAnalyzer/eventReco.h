@@ -261,8 +261,12 @@ void eventreco(ZEventRecoInput in)
   if(nEvents > in.MaxNEvents)
     nEvents = in.MaxNEvents;
   printf("nEvents: %ld\n", nEvents);
-  TFile *outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
-  TTree *tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
+  TFile *outputFile = nullptr;
+  TTree *tree = nullptr;
+  if(in.Name == "mcSigReco") {
+    outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
+    tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
+  }
     float mtt_fkr;
     float mtt_lkr;
     float ytt_fkr;
@@ -272,26 +276,28 @@ void eventreco(ZEventRecoInput in)
     float mtt_skr;
     float ytt_skr;
     float pttt_skr; 
-    //fkr branches
-    tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
-    tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
-    tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
-    //lkr branches
-    tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
-    tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
-    tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
-    //skr branches
-    tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
-    tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
-    tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
-    //gen branches
     float mtt_gen, ytt_gen, pttt_gen;
-    tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
-    tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
-    tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+    if (tree) {
+      //fkr branches
+      tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
+      tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
+      tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
+      //lkr branches
+      tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
+      tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
+      tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
+      //skr branches
+      tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
+      tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
+      tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
+      //gen branches
+      tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
+      tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
+      tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+    }
   // event loop
-  for(int e = 0; e < nEvents; e++)
-  //for(int e = 0; e < 1000; e++)
+  //for(int e = 0; e < nEvents; e++)
+  for(int e = 0; e < 1000; e++)
   {
     chain->GetEntry(e);
     if(flagMC)
@@ -323,7 +329,7 @@ void eventreco(ZEventRecoInput in)
     if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
       continue;
     // primary dataset name
-    TString inFile = chain->GetCurrentFile()->GetName();
+    //TString inFile = chain->GetCurrentFile()->GetName();
     // select dilepton pair
     TLorentzVector vecLepM, vecLepP;
     double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
@@ -535,7 +541,9 @@ void eventreco(ZEventRecoInput in)
       double w = in.Weight;
       FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
     } // end kinreco
-    tree->Fill();
+    if (tree) {
+      tree->Fill();
+    }
   } // end event loop
   
   // print the numbers of selected events and events with successfull kinematic reconstruction
@@ -553,9 +561,11 @@ void eventreco(ZEventRecoInput in)
   fout->cd();
   StoreHistos(in.VecVarHisto);
   fout->Close();
-  outputFile->cd();
-  tree->Write();
-  outputFile->Close();
+  if (tree) {
+    outputFile->cd();
+    tree->Write();
+    outputFile->Close();
+  }
 }
 
 #endif
