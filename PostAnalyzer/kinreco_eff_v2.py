@@ -14,6 +14,7 @@ arrays = tree.arrays([
     "mtt_fkr", "pttt_fkr", "ytt_fkr",
     "mtt_skr", "pttt_skr", "ytt_skr",
     "mtt_lkr", "pttt_lkr", "ytt_lkr",
+    "mtt_lkr_mod", "pttt_lkr_mod", "ytt_lkr_mod",
     "mtt_gen", "pttt_gen", "ytt_gen"
 ], library="np")
 # FKR arrays
@@ -30,6 +31,11 @@ ytt_skr = arrays["ytt_skr"]
 mtt_lkr = arrays["mtt_lkr"]
 pttt_lkr = arrays["pttt_lkr"]
 ytt_lkr = arrays["ytt_lkr"]
+
+# LKR_mod arrays
+mtt_lkr_mod = arrays["mtt_lkr_mod"]
+pttt_lkr_mod = arrays["pttt_lkr_mod"]
+ytt_lkr_mod = arrays["ytt_lkr_mod"]
 
 # Generated arrays
 mtt_gen = arrays["mtt_gen"]
@@ -93,6 +99,14 @@ def calculate_efficiency(reco, gen, bins):
             n = len(gen_final)
             bias_unc.append(resolution[-1]/np.sqrt(n))
             resolution_unc.append(np.sqrt(np.sqrt(np.mean((residual-bias[-1])**4)-resolution[-1]**4)/n))
+    if np.all(np.array(efficiency) == 0):
+        efficiency = [float('nan')] * len(efficiency)
+    if np.all(np.isnan(efficiency_unc)):
+        efficiency_unc = [0] * len(efficiency_unc)
+    if np.all(np.isnan(bias_unc)):
+        bias_unc = [0] * len(bias_unc)
+    if np.all(np.isnan(resolution_unc)):
+        resolution_unc = [0] * len(resolution_unc)
     return bin_centers, efficiency, efficiency_unc, bias, bias_unc, resolution, resolution_unc
 
 bin_centers_mtt_fkr, eff_mtt_fkr, eff_unc_mtt_fkr, bias_mtt_fkr, bias_unc_mtt_fkr, resol_mtt_fkr, resol_unc_mtt_fkr = calculate_efficiency(mtt_fkr, mtt_gen, mtt_bins)
@@ -106,6 +120,10 @@ bin_centers_ytt_skr, eff_ytt_skr, eff_unc_ytt_skr, bias_ytt_skr, bias_unc_ytt_sk
 bin_centers_mtt_lkr, eff_mtt_lkr, eff_unc_mtt_lkr, bias_mtt_lkr, bias_unc_mtt_lkr, resol_mtt_lkr, resol_unc_mtt_lkr = calculate_efficiency(mtt_lkr, mtt_gen, mtt_bins)
 bin_centers_pttt_lkr, eff_pttt_lkr, eff_unc_pttt_lkr, bias_pttt_lkr, bias_unc_pttt_lkr, resol_pttt_lkr, resol_unc_pttt_lkr = calculate_efficiency(pttt_lkr, pttt_gen, pttt_bins)
 bin_centers_ytt_lkr, eff_ytt_lkr, eff_unc_ytt_lkr, bias_ytt_lkr, bias_unc_ytt_lkr, resol_ytt_lkr, resol_unc_ytt_lkr = calculate_efficiency(ytt_lkr, ytt_gen, ytt_bins)
+
+bin_centers_mtt_lkr_mod, eff_mtt_lkr_mod, eff_unc_mtt_lkr_mod, bias_mtt_lkr_mod, bias_unc_mtt_lkr_mod, resol_mtt_lkr_mod, resol_unc_mtt_lkr_mod = calculate_efficiency(mtt_lkr_mod, mtt_gen, mtt_bins)
+bin_centers_pttt_lkr_mod, eff_pttt_lkr_mod, eff_unc_pttt_lkr_mod, bias_pttt_lkr_mod, bias_unc_pttt_lkr_mod, resol_pttt_lkr_mod, resol_unc_pttt_lkr_mod = calculate_efficiency(pttt_lkr_mod, pttt_gen, pttt_bins)
+bin_centers_ytt_lkr_mod, eff_ytt_lkr_mod, eff_unc_ytt_lkr_mod, bias_ytt_lkr_mod, bias_unc_ytt_lkr_mod, resol_ytt_lkr_mod, resol_unc_ytt_lkr_mod = calculate_efficiency(ytt_lkr_mod, ytt_gen, ytt_bins)
 
 # Plotting
 fig, axs = plt.subplots(3, 3, figsize=(15, 12))
@@ -168,21 +186,24 @@ for ax in axs.flat:
 # Plotting efficiency
 fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
 fig_eff.subplots_adjust(0.11,0.08,0.97,0.93,wspace=0.28)
-axs_eff[0, 0].errorbar(bin_centers_mtt_skr, eff_mtt_skr, eff_unc_mtt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[0, 0].errorbar(bin_centers_mtt_fkr, eff_mtt_fkr, eff_unc_mtt_fkr, marker='o', markersize=5, label='FKR')
+axs_eff[0, 0].errorbar(bin_centers_mtt_skr, eff_mtt_skr, eff_unc_mtt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[0, 0].errorbar(bin_centers_mtt_lkr, eff_mtt_lkr, eff_unc_mtt_lkr, marker='o', markersize=5, label='LKR')
+axs_eff[0, 0].errorbar(bin_centers_mtt_lkr_mod, eff_mtt_lkr_mod, eff_unc_mtt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_eff[0, 0].set_xlabel('$M(t\\bar{t})$ [GeV]')
 axs_eff[0, 0].set_ylabel('Efficiency')
 axs_eff[0, 0].legend()
-axs_eff[0, 1].errorbar(bin_centers_pttt_skr, eff_pttt_skr, eff_unc_pttt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[0, 1].errorbar(bin_centers_pttt_fkr, eff_pttt_fkr, eff_unc_pttt_fkr, marker='o', markersize=5, label='FKR')
+axs_eff[0, 1].errorbar(bin_centers_pttt_skr, eff_pttt_skr, eff_unc_pttt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[0, 1].errorbar(bin_centers_pttt_lkr, eff_pttt_lkr, eff_unc_pttt_lkr, marker='o', markersize=5, label='LKR')
+axs_eff[0, 1].errorbar(bin_centers_pttt_lkr_mod, eff_pttt_lkr_mod, eff_unc_pttt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_eff[0, 1].set_xlabel('$p_{T}(t\\bar{t})$ [GeV]')
 axs_eff[0, 1].set_ylabel('Efficiency')
 axs_eff[0, 1].legend()
-axs_eff[1, 0].errorbar(bin_centers_ytt_skr, eff_ytt_skr, eff_unc_ytt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[1, 0].errorbar(bin_centers_ytt_fkr, eff_ytt_fkr, eff_unc_ytt_fkr, marker='o', markersize=5, label='FKR')
+axs_eff[1, 0].errorbar(bin_centers_ytt_skr, eff_ytt_skr, eff_unc_ytt_skr, marker='o', markersize=5, label='SKR')
 axs_eff[1, 0].errorbar(bin_centers_ytt_lkr, eff_ytt_lkr, eff_unc_ytt_lkr, marker='o', markersize=5, label='LKR')
+axs_eff[1, 0].errorbar(bin_centers_ytt_lkr_mod, eff_ytt_lkr_mod, eff_unc_ytt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_eff[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_eff[1, 0].set_ylabel('Efficiency')
 axs_eff[1, 0].legend()
@@ -196,18 +217,21 @@ fig_bias.subplots_adjust(0.11,0.08,0.97,0.93,wspace=0.28)
 axs_bias[0, 0].errorbar(bin_centers_mtt_fkr, bias_mtt_fkr, bias_unc_mtt_fkr, marker='o', markersize=5, label='FKR')
 axs_bias[0, 0].errorbar(bin_centers_mtt_skr, bias_mtt_skr, bias_unc_mtt_skr, marker='o', markersize=5, label='SKR')
 axs_bias[0, 0].errorbar(bin_centers_mtt_lkr, bias_mtt_lkr, bias_unc_mtt_lkr, marker='o', markersize=5, label='LKR')
+axs_bias[0, 0].errorbar(bin_centers_mtt_lkr_mod, bias_mtt_lkr_mod, bias_unc_mtt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_bias[0, 0].set_xlabel('$M(t\\bar{t})$ [GeV]')
 axs_bias[0, 0].set_ylabel('Bias [GeV]')
 axs_bias[0, 0].legend()
 axs_bias[0, 1].errorbar(bin_centers_pttt_fkr, bias_pttt_fkr, bias_unc_pttt_fkr, marker='o', markersize=5, label='FKR')
 axs_bias[0, 1].errorbar(bin_centers_pttt_skr, bias_pttt_skr, bias_unc_pttt_skr, marker='o', markersize=5, label='SKR')
 axs_bias[0, 1].errorbar(bin_centers_pttt_lkr, bias_pttt_lkr, bias_unc_pttt_lkr, marker='o', markersize=5, label='LKR')
+axs_bias[0, 1].errorbar(bin_centers_pttt_lkr_mod, bias_pttt_lkr_mod, bias_unc_pttt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_bias[0, 1].set_xlabel('$p_{T}(t\\bar{t})$ [GeV]')
 axs_bias[0, 1].set_ylabel('Bias [GeV]')
 axs_bias[0, 1].legend()
 axs_bias[1, 0].errorbar(bin_centers_ytt_fkr, bias_ytt_fkr, bias_unc_ytt_fkr, marker='o', markersize=5, label='FKR')
 axs_bias[1, 0].errorbar(bin_centers_ytt_skr, bias_ytt_skr, bias_unc_ytt_skr, marker='o', markersize=5, label='SKR')
 axs_bias[1, 0].errorbar(bin_centers_ytt_lkr, bias_ytt_lkr, bias_unc_ytt_lkr, marker='o', markersize=5, label='LKR')
+axs_bias[1, 0].errorbar(bin_centers_ytt_lkr_mod, bias_ytt_lkr_mod, bias_unc_ytt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_bias[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_bias[1, 0].set_ylabel('Bias')
 axs_bias[1, 0].legend()
@@ -221,18 +245,21 @@ fig_resol.subplots_adjust(0.11,0.08,0.97,0.93,wspace=0.28)
 axs_resol[0, 0].errorbar(bin_centers_mtt_fkr, resol_mtt_fkr, resol_unc_mtt_fkr, marker='o', markersize=5, label='FKR')
 axs_resol[0, 0].errorbar(bin_centers_mtt_skr, resol_mtt_skr, resol_unc_mtt_skr, marker='o', markersize=5, label='SKR')
 axs_resol[0, 0].errorbar(bin_centers_mtt_lkr, resol_mtt_lkr, resol_unc_mtt_lkr, marker='o', markersize=5, label='LKR')
+axs_resol[0, 0].errorbar(bin_centers_mtt_lkr_mod, resol_mtt_lkr_mod, resol_unc_mtt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_resol[0, 0].set_xlabel('$M(t\\bar{t})$ [GeV]')
 axs_resol[0, 0].set_ylabel('Resolution [GeV]')
 axs_resol[0, 0].legend()
 axs_resol[0, 1].errorbar(bin_centers_pttt_fkr, resol_pttt_fkr, resol_unc_pttt_fkr, marker='o', markersize=5, label='FKR')
 axs_resol[0, 1].errorbar(bin_centers_pttt_skr, resol_pttt_skr, resol_unc_pttt_skr, marker='o', markersize=5, label='SKR')
 axs_resol[0, 1].errorbar(bin_centers_pttt_lkr, resol_pttt_lkr, resol_unc_pttt_lkr, marker='o', markersize=5, label='LKR')
+axs_resol[0, 1].errorbar(bin_centers_pttt_lkr_mod, resol_pttt_lkr_mod, resol_unc_pttt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_resol[0, 1].set_xlabel('$p_{T}(t\\bar{t})$ [GeV]')
 axs_resol[0, 1].set_ylabel('Resolution [GeV]')
 axs_resol[0, 1].legend()
 axs_resol[1, 0].errorbar(bin_centers_ytt_fkr, resol_ytt_fkr, resol_unc_ytt_fkr, marker='o', markersize=5, label='FKR')
 axs_resol[1, 0].errorbar(bin_centers_ytt_skr, resol_ytt_skr, resol_unc_ytt_skr, marker='o', markersize=5, label='SKR')
 axs_resol[1, 0].errorbar(bin_centers_ytt_lkr, resol_ytt_lkr, resol_unc_ytt_lkr, marker='o', markersize=5, label='LKR')
+axs_resol[1, 0].errorbar(bin_centers_ytt_lkr_mod, resol_ytt_lkr_mod, resol_unc_ytt_lkr_mod, marker='o', markersize=5, label='LKR_mod')
 axs_resol[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_resol[1, 0].set_ylabel('Resolution')
 axs_resol[1, 0].legend()

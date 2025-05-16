@@ -245,8 +245,10 @@ void eventreco(ZEventRecoInput in)
   TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
 
   KinematicReconstruction* kinReco = nullptr;
-  bool flag_fkr = 1;
+  bool flag_skr = 0;
+  bool flag_fkr = 0;
   bool flag_lkr = 1;
+  bool flag_lkr_mod = 1;
 
   if (flag_fkr) {
     //double TopMASS = 172.5;
@@ -267,38 +269,63 @@ void eventreco(ZEventRecoInput in)
     outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
     tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
   }
-    float mtt_fkr;
-    float mtt_lkr;
-    float ytt_fkr;
-    float ytt_lkr;
-    float pttt_fkr;
-    float pttt_lkr;
-    float mtt_skr;
-    float ytt_skr;
-    float pttt_skr; 
-    float mtt_gen, ytt_gen, pttt_gen;
-    if (tree) {
-      //fkr branches
-      tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
-      tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
-      tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
-      //lkr branches
-      tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
-      tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
-      tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
-      //skr branches
-      tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
-      tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
-      tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
-      //gen branches
-      tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
-      tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
-      tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
-    }
+  // initialised by -1000 (this default value remains if not correctly reconstructed later)
+  float mtt_fkr = -1000.;
+  float mtt_lkr = -1000.;
+  float ytt_fkr = -1000.;
+  float ytt_lkr = -1000.;
+  float pttt_fkr = -1000.;
+  float pttt_lkr = -1000.;
+  float mtt_skr = -1000.;
+  float ytt_skr = -1000.;
+  float pttt_skr = -1000.; 
+  float mtt_gen = -1000.;
+  float ytt_gen = -1000.;
+  float pttt_gen = -1000.;
+  float mtt_lkr_mod = -1000.;
+  float ytt_lkr_mod = -1000.;
+  float pttt_lkr_mod = -1000.;
+  if (tree) {
+    //fkr branches
+    tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
+    tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
+    tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
+    //lkr branches
+    tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
+    tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
+    tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
+    //lkr_mod branches
+    tree->Branch("mtt_lkr_mod", &mtt_lkr_mod, "mtt_lkr_mod/F");
+    tree->Branch("ytt_lkr_mod", &ytt_lkr_mod, "ytt_lkr_mod/F");
+    tree->Branch("pttt_lkr_mod", &pttt_lkr_mod, "pttt_lkr_mod/F");
+    //skr branches
+    tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
+    tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
+    tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
+    //gen branches
+    tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
+    tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
+    tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+  }
   // event loop
-  //for(int e = 0; e < nEvents; e++)
-  for(int e = 0; e < 1000; e++)
+  for(int e = 0; e < nEvents; e++)
+  //for(int e = 0; e < 1000; e++)
   {
+    mtt_fkr = -1000.;
+    mtt_lkr = -1000.;
+    ytt_fkr = -1000.;
+    ytt_lkr = -1000.;
+    pttt_fkr = -1000.;
+    pttt_lkr = -1000.;
+    mtt_skr = -1000.;
+    ytt_skr = -1000.;
+    pttt_skr = -1000.; 
+    mtt_gen = -1000.;
+    ytt_gen = -1000.;
+    pttt_gen = -1000.;
+    mtt_lkr_mod = -1000.;
+    ytt_lkr_mod = -1000.;
+    pttt_lkr_mod = -1000.;
     chain->GetEntry(e);
     if(flagMC)
     {
@@ -427,19 +454,21 @@ void eventreco(ZEventRecoInput in)
     
     // now run kinematic reconstruction to restore the top and antitop momenta
     TLorentzVector t, tbar;
-    // call main routine, see kinReco.h for description
-    int status = KinRecoDilepton(vecLepM, vecLepP, vecJets, preselTree->metPx, preselTree->metPy, t, tbar, hInacc, hAmbig);
-    // returned status is 1 for successfull kinreco, 0 otherwise
-    // t, tbar are vectors with single "best" solution (if kinreco was successfull)
-    //printf("STATUS: %d\n", status);
+    // SIMPLE KINEMATIC RECONSTRUCTION
+    int status = 0;
+    if (flag_skr) {
+      // call main routine, see kinReco.h for description
+      status = KinRecoDilepton(vecLepM, vecLepP, vecJets, preselTree->metPx, preselTree->metPy, t, tbar, hInacc, hAmbig);
+      // returned status is 1 for successfull kinreco, 0 otherwise
+      // t, tbar are vectors with single "best" solution (if kinreco was successfull)
+      //printf("STATUS: %d\n", status);
+      if (status) {
+        mtt_skr = (t+tbar).M();
+        ytt_skr = (t+tbar).Rapidity();
+        pttt_skr = (t+tbar).Pt();
+      }
+    }
     // FULL KINEMATIC RECONSTRUCTION
-    // initialised by -1000 (this default value remains if not correctly reconstructed later)
-    mtt_fkr = -1000.;
-    mtt_lkr = -1000.;
-    ytt_fkr = -1000.;
-    ytt_lkr = -1000.;
-    pttt_fkr = -1000.;
-    pttt_lkr = -1000.;
     if (flag_fkr) {
       VLV leptons = {common::TLVtoLV(vecLepM), common::TLVtoLV(vecLepP)};
       std::vector<int> krLepInd = { 0 };
@@ -475,27 +504,20 @@ void eventreco(ZEventRecoInput in)
         ytt_fkr=(t_fkr + tbar_fkr).Rapidity();
         pttt_fkr=(t_fkr + tbar_fkr).Pt();
       }
-      if (1==1) {
-        // print results vs generator level
-        // -1000 if not reconstructed
-        mtt_skr = status ? (t+tbar).M() : -1000.;
-        ytt_skr = status ? (t+tbar).Rapidity() : -1000.;
-        pttt_skr = status ? (t+tbar).Pt() : -1000.;
-        TLorentzVector t_gen, tbar_gen;
-        t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
-        tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
-
-      }
     }
     if(flag_lkr){
       // find best jets: prefer b-tagged jets, among those with equal b-ta number prefer jets with the highest sum of pT, require M(lb) < 180 GeV
       int bTagBest = 0;
       float pTSumBest = 0;
       TLorentzVector jetBest1, jetBest2;
+      for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++) {
+        printf("j%d: %+7.0f%+7.0f%+7.0f%+7.0f\n", int(jet1-vecJets.begin()), jet1->Px(), jet1->Py(), jet1->Pz(), jet1->E());
+      }
       for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++)
       {
         if((*jet1+vecLepM).M() > 180 && (*jet1+vecLepP).M() > 180) continue;
-        for(std::vector<TLorentzVector>::const_iterator jet2 = vecJets.begin(); jet2 != vecJets.end(); jet2++)
+        //for(std::vector<TLorentzVector>::const_iterator jet2 = vecJets.begin(); jet2 != vecJets.end(); jet2++)
+        for(std::vector<TLorentzVector>::const_iterator jet2 = jet1 + 1; jet2 != vecJets.end(); jet2++)
         {
           if((*jet2+vecLepM).M() > 180 && (*jet2+vecLepP).M() > 180) continue;
           // skip same jets
@@ -517,12 +539,70 @@ void eventreco(ZEventRecoInput in)
           if(jet2->M() < 0) jetBest2.SetPtEtaPhiM(jet2->Pt(), jet2->Eta(), jet2->Phi(), -1 * jet2->M());
           else jetBest2 = *jet2;
           // get solution
-          TLorentzVector ttbar= LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
+          TLorentzVector ttbar = LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
           mtt_lkr = ttbar.M();
           ytt_lkr = ttbar.Rapidity();
           pttt_lkr = ttbar.Pt();
         }
       }
+    }
+    if(flag_lkr_mod){
+      // find best jets: prefer b-tagged jets, among those with equal b-ta number prefer jets with the highest sum of pT, require M(lb) < 180 GeV
+      int bTagBest = 0;
+      std::map<int,float> pTSumBest;
+      pTSumBest[0] = 0.;
+      pTSumBest[1] = 0.;
+      pTSumBest[2] = 0.;
+      TLorentzVector jetBest1, jetBest2;
+      for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++) {
+        printf("j%d: %+7.0f%+7.0f%+7.0f%+7.0f\n", int(jet1-vecJets.begin()), jet1->Px(), jet1->Py(), jet1->Pz(), jet1->E());
+      }
+      for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++)
+      {
+        if((*jet1+vecLepM).M() > 180 && (*jet1+vecLepP).M() > 180) continue;
+        //for(std::vector<TLorentzVector>::const_iterator jet2 = vecJets.begin(); jet2 != vecJets.end(); jet2++)
+        for(std::vector<TLorentzVector>::const_iterator jet2 = jet1 + 1; jet2 != vecJets.end(); jet2++)
+        {
+          if((*jet2+vecLepM).M() > 180 && (*jet2+vecLepP).M() > 180) continue;
+          // skip same jets
+          if(jet1 == jet2) {
+            printf("dupa\n");
+            continue;
+          }
+          // for this pair of jets, calculate number of b-tagged jets,
+          // b-tagged jets are provided with negative masses (see selection.h)
+          int bTag = int(jet1->M() < 0) + int(jet2->M() < 0);
+          if(bTag < bTagBest) continue;
+          // need to reset the best pT sum to 0 if we found a higher b-tag category
+          // calculate the sum of pT
+          float pTSum = jet1->Pt() + jet2->Pt();
+          if(pTSum < pTSumBest[bTag]) continue;
+          // store these jets
+          if(jet1->M() < 0) jetBest1.SetPtEtaPhiM(jet1->Pt(), jet1->Eta(), jet1->Phi(), -1 * jet1->M());
+          else jetBest1 = *jet1;
+          if(jet2->M() < 0) jetBest2.SetPtEtaPhiM(jet2->Pt(), jet2->Eta(), jet2->Phi(), -1 * jet2->M());
+          else jetBest2 = *jet2;
+          // get solution
+          TLorentzVector ttbar = LooseKinReco_mod(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
+          printf("%e [%e %e %e %e] [%e %e %e %e]\n", ttbar.E(), jetBest1.Pt(), jetBest1.Eta(), jetBest1.Phi(), jetBest1.M(), jetBest2.Pt(), jetBest2.Eta(), jetBest2.Phi(), jetBest2.M());
+          if(ttbar.E() > 0.1) {
+            mtt_lkr_mod = ttbar.M();
+            ytt_lkr_mod = ttbar.Rapidity();
+            pttt_lkr_mod = ttbar.Pt();
+            bTagBest = bTag;
+            pTSumBest[bTag] = pTSum;
+          }
+        }
+      }
+      //printf("%e\n", mtt_lkr_mod);
+      printf("(1)  %e  %e\n", mtt_lkr, mtt_lkr_mod);
+      if (mtt_lkr_mod < -999.) {
+        //printf("  %e -> %e\n", mtt_lkr, mtt_lkr_mod);
+        mtt_lkr_mod = mtt_lkr;
+        ytt_lkr_mod = ytt_lkr;
+        pttt_lkr_mod = pttt_lkr;
+      }
+      printf("(2)  %e  %e\n", mtt_lkr, mtt_lkr_mod);
     }
     TLorentzVector t_gen, tbar_gen;
     t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
