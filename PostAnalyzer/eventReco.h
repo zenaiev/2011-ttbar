@@ -88,6 +88,7 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     TH1* histo = VecVarHisto[h].H();
     // now fill histograms depending on the variable:
     // top pT
+    //std::cout<<var<<std::endl;
     if(var == "ptt") 
       histo->Fill(t->Pt(), w);
     // antitop pT
@@ -120,7 +121,10 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     // ttbar invariant mass
     else if(var == "mtt") 
       histo->Fill(ttbar.M(), w);
+    else if(var == "phitt") 
+      histo->Fill(ttbar.Phi(), w);
     // lepton pT
+    
     else if(var == "ptl") 
     {
       histo->Fill(vecLepM->Pt(), w);
@@ -268,36 +272,43 @@ void eventreco(ZEventRecoInput in)
     tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
   }
     float mtt_fkr;
+    float phitt_fkr;
     float mtt_lkr;
+    float phitt_lkr;
     float ytt_fkr;
     float ytt_lkr;
     float pttt_fkr;
     float pttt_lkr;
     float mtt_skr;
+    float phitt_skr;
     float ytt_skr;
     float pttt_skr; 
-    float mtt_gen, ytt_gen, pttt_gen;
+    float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
     if (tree) {
       //fkr branches
       tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
+      tree->Branch("phitt_fkr", &phitt_fkr, "phitt_fkr/F");
       tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
       tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
       //lkr branches
       tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
+      tree->Branch("phitt_lkr", &phitt_lkr, "phitt_lkr/F");
       tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
       tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
       //skr branches
       tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
+      tree->Branch("phitt_skr", &phitt_skr, "phitt_skr/F");
       tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
       tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
       //gen branches
       tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
+      tree->Branch("phitt_gen", &phitt_gen, "phitt_gen/F");
       tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
       tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
     }
   // event loop
-  //for(int e = 0; e < nEvents; e++)
-  for(int e = 0; e < 1000; e++)
+  for(int e = 0; e < nEvents; e++)
+  //for(int e = 0; e < 20000; e++)
   {
     chain->GetEntry(e);
     if(flagMC)
@@ -440,6 +451,11 @@ void eventreco(ZEventRecoInput in)
     ytt_lkr = -1000.;
     pttt_fkr = -1000.;
     pttt_lkr = -1000.;
+    phitt_fkr = -1000.;
+    phitt_lkr = -1000.;
+    bool flagPassedKinRec;
+    TLorentzVector t_fkr;
+    TLorentzVector tbar_fkr;
     if (flag_fkr) {
       VLV leptons = {common::TLVtoLV(vecLepM), common::TLVtoLV(vecLepP)};
       std::vector<int> krLepInd = { 0 };
@@ -460,20 +476,21 @@ void eventreco(ZEventRecoInput in)
       met.SetPx(preselTree->metPx);
       met.SetPy(preselTree->metPy);
       KinematicReconstructionSolutions krSolutions = kinReco->solutions(krLepInd, krAntiLepInd, krJetInd, krBJetInd, leptons, jets, btags, common::TLVtoLV(met));
-      bool flagPassedKinRec = krSolutions.numberOfSolutions();
+      flagPassedKinRec = krSolutions.numberOfSolutions();
       //if(flagPassedKinRec == 0)
       //  continue;
       //printf("classic: %d %f %f %f %f %f %f\n", krSolutions.numberOfSolutions(),
       //       krSolutions.solution().neutrino().Px(), krSolutions.solution().neutrino().Py(), krSolutions.solution().neutrino().Pz(),
       //       krSolutions.solution().antiNeutrino().Px(), krSolutions.solution().antiNeutrino().Py(), krSolutions.solution().antiNeutrino().Pz());
-  
+   
       if(flagPassedKinRec)
       {
-        TLorentzVector t_fkr = common::LVtoTLV(krSolutions.solution().top());
-        TLorentzVector tbar_fkr = common::LVtoTLV(krSolutions.solution().antiTop());
+        t_fkr = common::LVtoTLV(krSolutions.solution().top());
+        tbar_fkr = common::LVtoTLV(krSolutions.solution().antiTop());
         mtt_fkr = (t_fkr + tbar_fkr).M();
         ytt_fkr=(t_fkr + tbar_fkr).Rapidity();
         pttt_fkr=(t_fkr + tbar_fkr).Pt();
+        phitt_fkr = (t_fkr + tbar_fkr).Phi();
       }
       if (1==1) {
         // print results vs generator level
@@ -481,6 +498,7 @@ void eventreco(ZEventRecoInput in)
         mtt_skr = status ? (t+tbar).M() : -1000.;
         ytt_skr = status ? (t+tbar).Rapidity() : -1000.;
         pttt_skr = status ? (t+tbar).Pt() : -1000.;
+        phitt_skr = status ? (t+tbar).Phi() : -1000.;
         TLorentzVector t_gen, tbar_gen;
         t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
         tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
@@ -521,6 +539,7 @@ void eventreco(ZEventRecoInput in)
           mtt_lkr = ttbar.M();
           ytt_lkr = ttbar.Rapidity();
           pttt_lkr = ttbar.Pt();
+          phitt_lkr = ttbar.Phi();
         }
       }
     }
@@ -530,7 +549,10 @@ void eventreco(ZEventRecoInput in)
     mtt_gen=(t_gen+tbar_gen).M();
     ytt_gen=(t_gen+tbar_gen).Rapidity();
     pttt_gen=(t_gen+tbar_gen).Pt();
-    if(status > 0) // successfull kinreco
+    phitt_gen=(t_gen+tbar_gen).Phi();
+    //if(flagPassedKinRec> 0) // succesful fkr
+     if(status>0)// successfull skr
+    //if(mtt_lkr>-999) // succesful lkr
     {
       // print the top and antitop momenta, if needed
       //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
@@ -539,6 +561,7 @@ void eventreco(ZEventRecoInput in)
       
       // fill histograms
       double w = in.Weight;
+      //std::cout<<phitt_skr<<std::endl;
       FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
     } // end kinreco
     if (tree) {

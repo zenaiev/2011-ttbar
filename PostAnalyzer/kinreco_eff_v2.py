@@ -11,41 +11,45 @@ tree = uproot.open("ttbar_output_123.root")["ttbarTree"]
 
 # Зчитуємо необхідні масиви
 arrays = tree.arrays([
-    "mtt_fkr", "pttt_fkr", "ytt_fkr",
-    "mtt_skr", "pttt_skr", "ytt_skr",
-    "mtt_lkr", "pttt_lkr", "ytt_lkr",
-    "mtt_gen", "pttt_gen", "ytt_gen"
+    "mtt_fkr", "pttt_fkr", "ytt_fkr","phitt_fkr",
+    "mtt_skr", "pttt_skr", "ytt_skr","phitt_skr",
+    "mtt_lkr", "pttt_lkr", "ytt_lkr","phitt_lkr",
+    "mtt_gen", "pttt_gen", "ytt_gen","phitt_gen",
 ], library="np")
 # FKR arrays
 mtt_fkr = arrays["mtt_fkr"]
 pttt_fkr = arrays["pttt_fkr"]
 ytt_fkr = arrays["ytt_fkr"]
+phitt_fkr = arrays["phitt_fkr"]
 
 # SKR arrays
 mtt_skr = arrays["mtt_skr"]
 pttt_skr = arrays["pttt_skr"]
 ytt_skr = arrays["ytt_skr"]
+phitt_skr = arrays["phitt_skr"]
 
 # LKR arrays
 mtt_lkr = arrays["mtt_lkr"]
 pttt_lkr = arrays["pttt_lkr"]
 ytt_lkr = arrays["ytt_lkr"]
-
+phitt_lkr = arrays["phitt_lkr"]
 # Generated arrays
 mtt_gen = arrays["mtt_gen"]
 pttt_gen = arrays["pttt_gen"]
 ytt_gen = arrays["ytt_gen"]
+phitt_gen = arrays["phitt_gen"]
 
 # Визначаємо бінування
 #mtt_bins = np.linspace(340, 1400, 14)
 #pttt_bins = np.linspace(0, 800, 14)
 #ytt_bins = np.linspace(-2.4, 2.4, 14)
+pi = np.pi
 mtt_bins = np.concatenate((np.linspace(340, 450, 5, endpoint=False), np.logspace(np.log10(450), np.log10(700), 5, endpoint=False), np.logspace(np.log10(700), np.log10(1400), 8)))
 pttt_bins = np.concatenate((np.linspace(0, 100, 5, endpoint=False), np.logspace(np.log10(100), np.log10(250), 5, endpoint=False), np.logspace(np.log10(250), np.log10(800), 8)))
 ytt_bins = [-2.4,-2.0,-1.75] + np.linspace(-1.6, 1.6, 16, endpoint=False).tolist() + [1.75,2.0,2.4]
-
+phitt_bins = np.linspace(-pi,pi,9)
 # Функція для обрахунку ефективності
-def calculate_efficiency(reco, gen, bins):
+def calculate_efficiency(reco, gen, bins, flag_phitt=0):
     bin_centers = []
     efficiency = []
     efficiency_unc = []
@@ -82,8 +86,15 @@ def calculate_efficiency(reco, gen, bins):
             gen_final = gen[mask_bin & mask_reco]
             # один раз рахуємо і зберігаємо різницю rec-gen
             residual = reco_final - gen_final
+            if flag_phitt == 1:
+                residual1 = residual[residual > np.pi]
+                residual1 = 2*np.pi - residual1
+                residual[residual > np.pi] = residual1
+                residual2 = residual[residual < -np.pi]
+                residual2 = 2*np.pi + residual2
+                residual[residual < -np.pi] = residual2
             bias.append(np.mean(residual))
-            # рахуємо роздільну здатність (resolution): sigma = sqrt(sum((rec-gen)-mean((rec-gen)^2)/n))
+            # рахуємо роздільну здатність (resolution): sigma = sqrt(sum((rec-gen)^2-mean((rec-gen)^2)/n))
             # роздільна здатність це квадратний корінь із варіації (variance)
             # див. https://pdg.lbl.gov/ -> "Reviews, tables, plots" -> "Mathematicl tools" -> "Statistics" -> "40.2.1Estimators for mean, variance, and median"
             #resolution.append(np.std(residual)) # це короткий метод
@@ -96,19 +107,30 @@ def calculate_efficiency(reco, gen, bins):
     return bin_centers, efficiency, efficiency_unc, bias, bias_unc, resolution, resolution_unc
 
 bin_centers_mtt_fkr, eff_mtt_fkr, eff_unc_mtt_fkr, bias_mtt_fkr, bias_unc_mtt_fkr, resol_mtt_fkr, resol_unc_mtt_fkr = calculate_efficiency(mtt_fkr, mtt_gen, mtt_bins)
+bin_centers_phitt_fkr, eff_phitt_fkr, eff_unc_phitt_fkr, bias_phitt_fkr, bias_unc_phitt_fkr, resol_phitt_fkr, resol_unc_phitt_fkr = calculate_efficiency(phitt_fkr, phitt_gen, phitt_bins,flag_phitt=1)
 bin_centers_pttt_fkr, eff_pttt_fkr, eff_unc_pttt_fkr, bias_pttt_fkr, bias_unc_pttt_fkr, resol_pttt_fkr, resol_unc_pttt_fkr = calculate_efficiency(pttt_fkr, pttt_gen, pttt_bins)
 bin_centers_ytt_fkr, eff_ytt_fkr, eff_unc_ytt_fkr, bias_ytt_fkr, bias_unc_ytt_fkr, resol_ytt_fkr, resol_unc_ytt_fkr = calculate_efficiency(ytt_fkr, ytt_gen, ytt_bins)
 
 bin_centers_mtt_skr, eff_mtt_skr, eff_unc_mtt_skr, bias_mtt_skr, bias_unc_mtt_skr, resol_mtt_skr, resol_unc_mtt_skr = calculate_efficiency(mtt_skr, mtt_gen, mtt_bins)
+bin_centers_phitt_skr, eff_phitt_skr, eff_unc_phitt_skr, bias_phitt_skr, bias_unc_phitt_skr, resol_phitt_skr, resol_unc_phitt_skr = calculate_efficiency(phitt_skr, phitt_gen, phitt_bins, flag_phitt=1)
 bin_centers_pttt_skr, eff_pttt_skr, eff_unc_pttt_skr, bias_pttt_skr, bias_unc_pttt_skr, resol_pttt_skr, resol_unc_pttt_skr = calculate_efficiency(pttt_skr, pttt_gen, pttt_bins)
 bin_centers_ytt_skr, eff_ytt_skr, eff_unc_ytt_skr, bias_ytt_skr, bias_unc_ytt_skr, resol_ytt_skr, resol_unc_ytt_skr = calculate_efficiency(ytt_skr, ytt_gen, ytt_bins)
 
 bin_centers_mtt_lkr, eff_mtt_lkr, eff_unc_mtt_lkr, bias_mtt_lkr, bias_unc_mtt_lkr, resol_mtt_lkr, resol_unc_mtt_lkr = calculate_efficiency(mtt_lkr, mtt_gen, mtt_bins)
+bin_centers_phitt_lkr, eff_phitt_lkr, eff_unc_phitt_lkr, bias_phitt_lkr, bias_unc_phitt_lkr, resol_phitt_lkr, resol_unc_phitt_lkr = calculate_efficiency(phitt_lkr, phitt_gen, phitt_bins, flag_phitt=1)
 bin_centers_pttt_lkr, eff_pttt_lkr, eff_unc_pttt_lkr, bias_pttt_lkr, bias_unc_pttt_lkr, resol_pttt_lkr, resol_unc_pttt_lkr = calculate_efficiency(pttt_lkr, pttt_gen, pttt_bins)
 bin_centers_ytt_lkr, eff_ytt_lkr, eff_unc_ytt_lkr, bias_ytt_lkr, bias_unc_ytt_lkr, resol_ytt_lkr, resol_unc_ytt_lkr = calculate_efficiency(ytt_lkr, ytt_gen, ytt_bins)
-
+print("FKR eff, mtt:",sum(eff_mtt_fkr)/len(eff_mtt_fkr),"+-",sum(eff_unc_mtt_fkr)/len(eff_unc_mtt_fkr))
+print("ytt:",sum(eff_ytt_fkr)/len(eff_ytt_fkr), "+-",sum(eff_unc_ytt_fkr)/len(eff_unc_ytt_fkr))
+print("pttt:",sum(eff_pttt_fkr)/len(eff_pttt_fkr), "+-",sum(eff_unc_pttt_fkr)/len(eff_unc_pttt_fkr))
+print("SKR eff, mtt:",sum(eff_mtt_skr)/len(eff_mtt_skr),"+-",sum(eff_unc_mtt_skr)/len(eff_unc_mtt_skr))
+print("ytt:",sum(eff_ytt_skr)/len(eff_ytt_skr), "+-",sum(eff_unc_ytt_skr)/len(eff_unc_ytt_skr))
+print("pttt:",sum(eff_pttt_skr)/len(eff_pttt_skr), "+-",sum(eff_unc_pttt_skr)/len(eff_unc_pttt_skr))
+print("LKR eff, mtt:",sum(eff_mtt_lkr)/len(eff_mtt_lkr),"+-",sum(eff_unc_mtt_lkr)/len(eff_unc_mtt_lkr))
+print("ytt:",sum(eff_ytt_lkr)/len(eff_ytt_lkr), "+-",sum(eff_unc_ytt_lkr)/len(eff_unc_ytt_lkr))
+print("pttt:",sum(eff_pttt_lkr)/len(eff_pttt_lkr), "+-",sum(eff_unc_pttt_lkr)/len(eff_unc_pttt_lkr))
 # Plotting
-fig, axs = plt.subplots(3, 3, figsize=(15, 12))
+""" fig, axs = plt.subplots(3, 3, figsize=(15, 12))
 
 # FKR
 #axs[0, 0].scatter(bin_centers_mtt_fkr, eff_mtt_fkr)
@@ -127,6 +149,10 @@ axs[0, 2].plot(bin_centers_ytt_fkr, eff_ytt_fkr)
 axs[0, 2].set_title('FKR: rapidity')
 axs[0, 2].set_xlabel('ytt')
 
+axs[1, 1].scatter(bin_centers_phitt_fkr, eff_phitt_fkr)
+axs[1, 1].plot(bin_centers_phitt_fkr, eff_phitt_fkr)
+axs[1, 1].set_title('FKR: azimutal angle')
+axs[1, 1].set_xlabel('phitt')
 
 # SKR
 axs[1, 0].scatter(bin_centers_mtt_skr, eff_mtt_skr)
@@ -144,6 +170,11 @@ axs[1, 2].plot(bin_centers_ytt_skr, eff_ytt_skr)
 axs[1, 2].set_title('SKR: ytt')
 axs[1, 2].set_xlabel('ytt')
 
+axs[1, 3].scatter(bin_centers_phitt_skr, eff_phitt_skr)
+axs[1, 3].plot(bin_centers_phitt_skr, eff_phitt_skr)
+axs[1, 3].set_title('SKR: azimutal angle')
+axs[1, 3].set_xlabel('phitt')
+
 # LKR
 axs[2, 0].scatter(bin_centers_mtt_lkr, eff_mtt_lkr)
 axs[2, 0].plot(bin_centers_mtt_lkr, eff_mtt_lkr)
@@ -160,10 +191,14 @@ axs[2, 2].plot(bin_centers_ytt_lkr, eff_ytt_lkr)
 axs[2, 2].set_title('LKR: ytt')
 axs[2, 2].set_xlabel('ytt')
 
+axs[2, 3].scatter(bin_centers_phitt_lkr, eff_phitt_lkr)
+axs[2, 3].plot(bin_centers_phitt_lkr, eff_phitt_lkr)
+axs[2, 3].set_title('LKR: azimutal angle')
+axs[2, 3].set_xlabel('phitt')
 # Formatting
 for ax in axs.flat:
     ax.set_ylabel('Efficiency')
-    ax.grid(True)
+    ax.grid(True)"""
 
 # Plotting efficiency
 fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
@@ -186,6 +221,12 @@ axs_eff[1, 0].errorbar(bin_centers_ytt_lkr, eff_ytt_lkr, eff_unc_ytt_lkr, marker
 axs_eff[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_eff[1, 0].set_ylabel('Efficiency')
 axs_eff[1, 0].legend()
+axs_eff[1, 1].errorbar(bin_centers_phitt_skr, eff_phitt_skr, eff_unc_phitt_skr, marker='o', markersize=5, label='SKR')
+axs_eff[1, 1].errorbar(bin_centers_phitt_fkr, eff_phitt_fkr, eff_unc_phitt_fkr, marker='o', markersize=5, label='FKR')
+axs_eff[1, 1].errorbar(bin_centers_phitt_lkr, eff_phitt_lkr, eff_unc_phitt_lkr, marker='o', markersize=5, label='LKR')
+axs_eff[1, 1].set_xlabel('$phi(t\\bar{t})$')
+axs_eff[1, 1].set_ylabel('Efficiency')
+axs_eff[1, 1].legend()
 fig_eff.suptitle('CMS open data $pp\\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV')
 fig_eff.savefig('plots/efficiency.pdf')
 fig_eff.savefig('plots/efficiency.png')
@@ -211,6 +252,12 @@ axs_bias[1, 0].errorbar(bin_centers_ytt_lkr, bias_ytt_lkr, bias_unc_ytt_lkr, mar
 axs_bias[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_bias[1, 0].set_ylabel('Bias')
 axs_bias[1, 0].legend()
+axs_bias[1, 1].errorbar(bin_centers_phitt_fkr, bias_phitt_fkr, bias_unc_phitt_fkr, marker='o', markersize=5, label='FKR')
+axs_bias[1, 1].errorbar(bin_centers_phitt_skr, bias_phitt_skr, bias_unc_phitt_skr, marker='o', markersize=5, label='SKR')
+axs_bias[1, 1].errorbar(bin_centers_phitt_lkr, bias_phitt_lkr, bias_unc_phitt_lkr, marker='o', markersize=5, label='LKR')
+axs_bias[1, 1].set_xlabel('$phi(t\\bar{t})$')
+axs_bias[1, 1].set_ylabel('Bias')
+axs_bias[1, 1].legend()
 fig_bias.suptitle('CMS open data $pp\\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV')
 fig_bias.savefig('plots/bias.pdf')
 fig_bias.savefig('plots/bias.png')
@@ -236,6 +283,12 @@ axs_resol[1, 0].errorbar(bin_centers_ytt_lkr, resol_ytt_lkr, resol_unc_ytt_lkr, 
 axs_resol[1, 0].set_xlabel('$y(t\\bar{t})$')
 axs_resol[1, 0].set_ylabel('Resolution')
 axs_resol[1, 0].legend()
+axs_resol[1, 1].errorbar(bin_centers_phitt_fkr, resol_phitt_fkr, resol_unc_phitt_fkr, marker='o', markersize=5, label='FKR')
+axs_resol[1, 1].errorbar(bin_centers_phitt_skr, resol_phitt_skr, resol_unc_phitt_skr, marker='o', markersize=5, label='SKR')
+axs_resol[1, 1].errorbar(bin_centers_phitt_lkr, resol_phitt_lkr, resol_unc_phitt_lkr, marker='o', markersize=5, label='LKR')
+axs_resol[1, 1].set_xlabel('$phi(t\\bar{t})$')
+axs_resol[1, 1].set_ylabel('Resolution')
+axs_resol[1, 1].legend()
 fig_resol.suptitle('CMS open data $pp\\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV')
 fig_resol.savefig('plots/resolution.pdf')
 fig_resol.savefig('plots/resolution.png')

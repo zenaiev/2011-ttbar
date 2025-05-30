@@ -121,7 +121,7 @@ void PlotCS(const ZPlotCSInput& in)
   c_cs = new TCanvas("ccs", "", 1200, 800);
   c_cs->Divide(3, 2, 0.0001);
   // loop over variables 
-  for(int v = 0; v < 5; v++)
+  for(int v = 0; v < 6; v++)
   {
     c_cs->cd(v + 1);
     if(v == 4)
@@ -226,7 +226,7 @@ void PlotCS(const ZPlotCSInput& in)
     hcombcs->Draw("hist same");
     hcombcs->Print("all");
     // plot paper results
-    if(in.Paper)
+    if(in.Paper && v<5)
     {
       TGraphAsymmErrors* gstat = HtoGragh(hcombcs, 0.7);
       gstat->SetLineColor(1);
