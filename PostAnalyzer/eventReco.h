@@ -140,6 +140,44 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     } // end variable for histo
   } // end loop over histos
 }
+void FillHistos_lkr(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* ttbar, TLorentzVector* vecLepM = NULL, TLorentzVector* vecLepP = NULL)
+{
+  // loop over provided histograms to be filled
+  for(int h = 0; h < VecVarHisto.size(); h++)
+  {
+    // retrieve variable name
+    TString var = VecVarHisto[h].V();
+    // retrieve histogram
+    TH1* histo = VecVarHisto[h].H();
+    // now fill histograms depending on the variable:
+    // ttbar pT
+    if(var == "pttt") 
+      histo->Fill(ttbar->Pt(), w);
+    // ttbar rapidity
+    else if(var == "ytt") 
+      histo->Fill(ttbar->Rapidity(), w);
+    // ttbar invariant mass
+    else if(var == "mtt") 
+      histo->Fill(ttbar->M(), w);
+    // Azimuthal angle
+    else if(var == "phitt") 
+      histo->Fill(ttbar->Phi(), w);
+    // lepton pT
+    else if(var == "ptl") 
+    {
+      histo->Fill(vecLepM->Pt(), w);
+      histo->Fill(vecLepP->Pt(), w);
+    }
+    // uknown (not implemented) variable
+    // (you can implement more variables here if needed)
+    else
+    {
+      //printf("Error: unknown variable %s\n", var.Data());
+      //exit(1);
+      continue;
+    } // end variable for histo
+  } // end loop over histos
+}
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -505,6 +543,7 @@ void eventreco(ZEventRecoInput in)
 
       }
     }
+    TLorentzVector ttbar_lkr;
     if(flag_lkr){
       // find best jets: prefer b-tagged jets, among those with equal b-ta number prefer jets with the highest sum of pT, require M(lb) < 180 GeV
       int bTagBest = 0;
@@ -535,11 +574,11 @@ void eventreco(ZEventRecoInput in)
           if(jet2->M() < 0) jetBest2.SetPtEtaPhiM(jet2->Pt(), jet2->Eta(), jet2->Phi(), -1 * jet2->M());
           else jetBest2 = *jet2;
           // get solution
-          TLorentzVector ttbar= LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
-          mtt_lkr = ttbar.M();
-          ytt_lkr = ttbar.Rapidity();
-          pttt_lkr = ttbar.Pt();
-          phitt_lkr = ttbar.Phi();
+          ttbar_lkr = LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
+          mtt_lkr = ttbar_lkr.M();
+          ytt_lkr = ttbar_lkr.Rapidity();
+          pttt_lkr = ttbar_lkr.Pt();
+          phitt_lkr = ttbar_lkr.Phi();
         }
       }
     }
@@ -562,6 +601,7 @@ void eventreco(ZEventRecoInput in)
       // fill histograms
       double w = in.Weight;
       //std::cout<<phitt_skr<<std::endl;
+      //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
       FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
     } // end kinreco
     if (tree) {
