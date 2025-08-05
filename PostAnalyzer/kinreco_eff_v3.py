@@ -26,16 +26,15 @@ bins_dict = {
     'ytt': ytt_bins,
     'phitt': phitt_bins
 }
-
-flag_phitt_dict = {
-    'mtt': 0,
-    'pttt': 0,
-    'ytt': 0,
-    'phitt': 1
+labels = {
+    'mtt': '$M(t\\bar{t})$ [GeV]',
+    'pttt': '$p_T(t\\bar{t})$ [GeV]',
+    'ytt': '$y(t\\bar{t})$',
+    'phitt': '$\\phi(t\\bar{t})$'
 }
-
+positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1)}
 # Функція обчислення
-def calculate_efficiency(reco, gen, bins, flag_phitt=0):
+def calculate_efficiency(reco, gen, bins, variable):
     bin_centers = []
     efficiency = []
     efficiency_unc = []
@@ -72,7 +71,7 @@ def calculate_efficiency(reco, gen, bins, flag_phitt=0):
             gen_final = gen[mask_bin & mask_reco]
             # один раз рахуємо і зберігаємо різницю rec-gen
             residual = reco_final - gen_final
-            if flag_phitt == 1:
+            if variable == 'phitt':
                 residual[residual > np.pi] = residual[residual > np.pi] - 2*np.pi
                 residual[residual < -np.pi] = residual[residual < -np.pi] + 2*np.pi
             bias.append(np.mean(residual))
@@ -96,20 +95,12 @@ for kinreco in kinrecos:
         reco_array = arrays[f"{variable}_{kinreco}"]
         gen_array = arrays[f"{variable}_gen"]
         bins = bins_dict[variable]
-        flag_phitt = flag_phitt_dict[variable]
-        results[kinreco][variable] = calculate_efficiency(reco_array, gen_array, bins, flag_phitt)
+        results[kinreco][variable] = calculate_efficiency(reco_array, gen_array, bins, variable)
 
 # Побудова графіків ефективності
 fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
 fig_eff.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
-labels = {
-    'mtt': '$M(t\\bar{t})$ [GeV]',
-    'pttt': '$p_T(t\\bar{t})$ [GeV]',
-    'ytt': '$y(t\\bar{t})$',
-    'phitt': '$\\phi(t\\bar{t})$'
-}
-positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1)}
 
 for variable in variables:
     i, j = positions[variable]
