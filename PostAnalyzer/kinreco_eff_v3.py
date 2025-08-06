@@ -1,9 +1,11 @@
 import uproot
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 
 # Відкриття дерева
-tree = uproot.open("ttbar_output_123.root")["ttbarTree"]
+filename = "ttbar_output_123.root" if len(sys.argv) < 2 else sys.argv[1]
+tree = uproot.open(filename)["ttbarTree"]
 
 # Визначення масивів для зчитування
 kinrecos = ['fkr', 'skr', 'lkr']
@@ -96,6 +98,11 @@ for kinreco in kinrecos:
         gen_array = arrays[f"{variable}_gen"]
         bins = bins_dict[variable]
         results[kinreco][variable] = calculate_efficiency(reco_array, gen_array, bins, variable)
+        with open(f'kr_performance/kr_performance_{kinreco}_{variable}.txt', 'w') as f:
+            for i in range(len(results[kinreco][variable][0])):
+                for ii in range(len(results[kinreco][variable])):
+                    f.write(f'{results[kinreco][variable][ii][i]:.2e} ')
+                f.write('\n')
 
 # Побудова графіків ефективності
 fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
