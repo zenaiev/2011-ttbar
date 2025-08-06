@@ -13,6 +13,6 @@ class FKR: public KinRecoBase {
       const Float_t metPx, const Float_t metPy
     );
   
-  private:
+  protected:
     KinematicReconstruction* _kinReco = nullptr;
 };

@@ -3,8 +3,9 @@
 #include "fkr/KinematicReconstructionSolution.h"
 #include "fkr/KinematicReconstruction_LSroutines.h"
 #include "fkr/analysisUtils.h"
+#include "krvars.h"
 
-FKR::FKR() {
+FKR::FKR() : KinRecoBase("fkr") {
   int minBTag = 1;
   bool preferBtags = true;
   _kinReco = new KinematicReconstruction("fkr/KinRecoInput.root", minBTag, preferBtags);  

@@ -293,6 +293,12 @@ void eventreco(ZEventRecoInput in)
   bool flag_fkr = 1;
   bool flag_lkr = 1;
 
+  std::vector<KRVAR*> krvars;
+  krvars.push_back(new Mtt());
+  krvars.push_back(new Ytt());
+  krvars.push_back(new Pttt());
+  krvars.push_back(new Phitt());
+
   KinRecoBase* fkr = nullptr;
   if (flag_fkr) {
     fkr = new FKR();
@@ -312,13 +318,12 @@ void eventreco(ZEventRecoInput in)
     outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
     tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
   }
-    float mtt_fkr;
-    float phitt_fkr;
+  if (flag_fkr) {
+    fkr->init(tree, krvars);
+  }
     float mtt_lkr;
     float phitt_lkr;
-    float ytt_fkr;
     float ytt_lkr;
-    float pttt_fkr;
     float pttt_lkr;
     float mtt_skr;
     float phitt_skr;
@@ -327,10 +332,6 @@ void eventreco(ZEventRecoInput in)
     float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
     if (tree) {
       //fkr branches
-      tree->Branch("mtt_fkr", &mtt_fkr, "mtt_fkr/F");
-      tree->Branch("phitt_fkr", &phitt_fkr, "phitt_fkr/F");
-      tree->Branch("ytt_fkr", &ytt_fkr, "ytt_fkr/F");
-      tree->Branch("pttt_fkr", &pttt_fkr, "pttt_fkr/F");
       //lkr branches
       tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
       tree->Branch("phitt_lkr", &phitt_lkr, "phitt_lkr/F");
@@ -486,35 +487,24 @@ void eventreco(ZEventRecoInput in)
     //printf("STATUS: %d\n", status);
     // FULL KINEMATIC RECONSTRUCTION
     // initialised by -1000 (this default value remains if not correctly reconstructed later)
-    mtt_fkr = -1000.;
     mtt_lkr = -1000.;
-    ytt_fkr = -1000.;
     ytt_lkr = -1000.;
-    pttt_fkr = -1000.;
     pttt_lkr = -1000.;
-    phitt_fkr = -1000.;
     phitt_lkr = -1000.;
     bool flagPassedKinRec;
-    TLorentzVector t_fkr;
-    TLorentzVector tbar_fkr;
     if (flag_fkr) {
       //KinematicReconstructionSolutions krSolutions = kinReco->solutions(krLepInd, krAntiLepInd, krJetInd, krBJetInd, leptons, jets, btags, common::TLVtoLV(met));
+      fkr->reset_vars();
       std::vector<TLorentzVector> solution = fkr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
+      if(solution.size()) {
+        fkr->calculate_vars(solution[0], solution[1], solution[2]);
+      }
       //if(flagPassedKinRec == 0)
       //  continue;
       //printf("classic: %d %f %f %f %f %f %f\n", krSolutions.numberOfSolutions(),
       //       krSolutions.solution().neutrino().Px(), krSolutions.solution().neutrino().Py(), krSolutions.solution().neutrino().Pz(),
       //       krSolutions.solution().antiNeutrino().Px(), krSolutions.solution().antiNeutrino().Py(), krSolutions.solution().antiNeutrino().Pz());
    
-      if(solution.size())
-      {
-        t_fkr = solution[0];
-        tbar_fkr = solution[1];
-        mtt_fkr = solution[2].M();
-        ytt_fkr=solution[2].Rapidity();
-        pttt_fkr=solution[2].Pt();
-        phitt_fkr = solution[2].Phi();
-      }
       if (1==1) {
         // print results vs generator level
         // -1000 if not reconstructed
