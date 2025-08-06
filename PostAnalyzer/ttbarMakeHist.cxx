@@ -98,12 +98,7 @@ int main(int argc, char** argv)
   if(read_int(nameConfigFile, "channel_emu", 1)) channels.push_back(3);
   
   // loop over decay channels (ch = 1 ee, ch = 2 mumu, ch = 3 emu)
-  //for(int ch = 1; ch <= 3; ch++)
-  for(int ch = 3; ch <= 3; ch++)
-  {
-    //if(ch != 3) continue; // if you need only emu (for test purpose e.g.)
-    if(std::find(channels.begin(), channels.end(), ch) == channels.end()) continue;
-    // 
+  for(auto& ch : channels) {
     // below similar pieces of code come for data and several MC samples, 
     // detailed description is given for the first piece, while later on 
     // only new features are described

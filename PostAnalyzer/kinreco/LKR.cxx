@@ -1,6 +1,5 @@
 #include "LKR.h"
 #include "krvars.h"
-#include "LooseKinReco.h"
 
 LKR::LKR() : KinRecoBase("lkr") {}
 

@@ -286,15 +286,15 @@ void eventreco(ZEventRecoInput in)
   // vector of kinematic reconstruction methods
   std::vector<KinRecoBase*> kinrecos;
   if (read_int(in.nameConfigFile, "kr_FKR", 0)) kinrecos.push_back(new FKR());
-  if (read_int(in.nameConfigFile, "kr_SKR", 0)) kinrecos.push_back(new SKR());
+  if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
   if (read_int(in.nameConfigFile, "kr_LKR", 0)) kinrecos.push_back(new LKR());
 
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
-  krvars.push_back(new Mtt());
-  krvars.push_back(new Ytt());
-  krvars.push_back(new Pttt());
-  krvars.push_back(new Phitt());
+  if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
+  if (read_int(in.nameConfigFile, "krvar_ytt", 1)) krvars.push_back(new Ytt());
+  if (read_int(in.nameConfigFile, "krvar_pttt", 1)) krvars.push_back(new Pttt());
+  if (read_int(in.nameConfigFile, "krvar_phitt", 1)) krvars.push_back(new Phitt());
 
   // determine number of events
   long nEvents = chain->GetEntries();
@@ -305,6 +305,7 @@ void eventreco(ZEventRecoInput in)
     nEvents = maxNEvents;
   printf("nEvents: %ld\n", nEvents);
   TFile *outputFile = nullptr;
+  // TTree to store kinematic reconstruction output
   TTree *tree_kr = nullptr;
   if(in.Name == "mcSigReco") {
     outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
@@ -323,7 +324,6 @@ void eventreco(ZEventRecoInput in)
   }
   // event loop
   for(int e = 0; e < nEvents; e++)
-  //for(int e = 0; e < 10000; e++)
   {
     chain->GetEntry(e);
     if(flagMC)
@@ -451,7 +451,18 @@ void eventreco(ZEventRecoInput in)
     // event selection done: increment the counter of selected events
     nSel++;
     
-    // now run kinematic reconstruction to restore the top and antitop momenta
+    // fill generator level top, tbar and ttbar variables
+    if(tree_kr) {
+      TLorentzVector t_gen, tbar_gen;
+      t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
+      tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
+      mtt_gen=(t_gen+tbar_gen).M();
+      ytt_gen=(t_gen+tbar_gen).Rapidity();
+      pttt_gen=(t_gen+tbar_gen).Pt();
+      phitt_gen=(t_gen+tbar_gen).Phi();
+    }
+
+    // run kinematic reconstruction to restore the top and antitop momenta
     bool flagPassedKinRec = false; // status used to go further to fill histograms
     TLorentzVector t, tbar; // vectors used to fill histograms
     for (auto& kr : kinrecos) {
@@ -469,14 +480,6 @@ void eventreco(ZEventRecoInput in)
         }
       }
     }
-    // generator level top, tbar and ttbar prticles
-    TLorentzVector t_gen, tbar_gen;
-    t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
-    tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
-    mtt_gen=(t_gen+tbar_gen).M();
-    ytt_gen=(t_gen+tbar_gen).Rapidity();
-    pttt_gen=(t_gen+tbar_gen).Pt();
-    phitt_gen=(t_gen+tbar_gen).Phi();
     if(flagPassedKinRec>0)// successfull skr
     {
       // print the top and antitop momenta, if needed
