@@ -7,6 +7,8 @@
 // page 4. Follows the method described in Phys. Rev. D73 (2006) 054015,
 // additional information can be found in DESY-THESIS-2012-037
 
+// Update 2025: now this is "simple kinematic reconstruction" (SKR)
+
 #ifndef TTBAR_KINRECO_H
 #define TTBAR_KINRECO_H
 

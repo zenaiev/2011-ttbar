@@ -7,6 +7,8 @@
 
 class KinRecoBase {
   public:
+    std::string GetName() {return _name;}
+
     void init(TTree* tree, const std::vector<KRVAR*>& krvars) {
       _krvars = krvars;
       _tree_vars.resize(_krvars.size());

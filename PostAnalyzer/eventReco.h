@@ -7,7 +7,6 @@
 
 // additional files from this analysis 
 #include "tree.h"
-#include "kinReco.h"
 #include "selection.h"
 #include "settings.h"
 #include "read_config.h"
@@ -16,17 +15,12 @@
 #include <TChain.h>
 #include <TCanvas.h>
 #include <TFile.h>
+#include <TH1.h>
 
-// FULL KINEMATIC RECONSTRUCTION
-//#include "fkr/KinematicReconstruction.h"
-//#include "fkr/KinematicReconstructionSolution.h"
-//#include "fkr/KinematicReconstruction_LSroutines.h"
-//#include "fkr/analysisUtils.h"
-#include "LooseKinReco.h"
-
-// kinematic reconstruction
+// kinematic reconstruction methods
 #include "kinreco/FKR.h"
-
+#include "kinreco/SKR.h"
+#include "kinreco/LKR.h"
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -286,23 +280,21 @@ void eventreco(ZEventRecoInput in)
   
   // histograms for kinematic reconstruction debugging
   // (not needed in physics analysis, not stored)
-  TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
-  TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
+  //TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
+  //TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
 
-  KinematicReconstruction* kinReco = nullptr;
-  bool flag_fkr = 1;
-  bool flag_lkr = 1;
+  // vector of kinematic reconstruction methods
+  std::vector<KinRecoBase*> kinrecos;
+  if (read_int(in.nameConfigFile, "kr_FKR", 0)) kinrecos.push_back(new FKR());
+  if (read_int(in.nameConfigFile, "kr_SKR", 0)) kinrecos.push_back(new SKR());
+  if (read_int(in.nameConfigFile, "kr_LKR", 0)) kinrecos.push_back(new LKR());
 
+  // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   krvars.push_back(new Mtt());
   krvars.push_back(new Ytt());
   krvars.push_back(new Pttt());
   krvars.push_back(new Phitt());
-
-  KinRecoBase* fkr = nullptr;
-  if (flag_fkr) {
-    fkr = new FKR();
-  }
 
   // determine number of events
   long nEvents = chain->GetEntries();
@@ -313,41 +305,22 @@ void eventreco(ZEventRecoInput in)
     nEvents = maxNEvents;
   printf("nEvents: %ld\n", nEvents);
   TFile *outputFile = nullptr;
-  TTree *tree = nullptr;
+  TTree *tree_kr = nullptr;
   if(in.Name == "mcSigReco") {
     outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
-    tree = new TTree("ttbarTree", "Tree storing ttbar event variables");
-  }
-  if (flag_fkr) {
-    fkr->init(tree, krvars);
-  }
-    float mtt_lkr;
-    float phitt_lkr;
-    float ytt_lkr;
-    float pttt_lkr;
-    float mtt_skr;
-    float phitt_skr;
-    float ytt_skr;
-    float pttt_skr; 
-    float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
-    if (tree) {
-      //fkr branches
-      //lkr branches
-      tree->Branch("mtt_lkr", &mtt_lkr, "mtt_lkr/F");
-      tree->Branch("phitt_lkr", &phitt_lkr, "phitt_lkr/F");
-      tree->Branch("ytt_lkr", &ytt_lkr, "ytt_lkr/F");
-      tree->Branch("pttt_lkr", &pttt_lkr, "pttt_lkr/F");
-      //skr branches
-      tree->Branch("mtt_skr", &mtt_skr, "mtt_skr/F");
-      tree->Branch("phitt_skr", &phitt_skr, "phitt_skr/F");
-      tree->Branch("ytt_skr", &ytt_skr, "ytt_skr/F");
-      tree->Branch("pttt_skr", &pttt_skr, "pttt_skr/F");
-      //gen branches
-      tree->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
-      tree->Branch("phitt_gen", &phitt_gen, "phitt_gen/F");
-      tree->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
-      tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+    tree_kr = new TTree("ttbarTree", "Tree storing ttbar event variables");
+    for (auto& kr : kinrecos) {
+      kr->init(tree_kr, krvars);
     }
+  }
+  float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
+  if (tree_kr) {
+    //gen branches
+    tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
+    tree_kr->Branch("phitt_gen", &phitt_gen, "phitt_gen/F");
+    tree_kr->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
+    tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+  }
   // event loop
   for(int e = 0; e < nEvents; e++)
   //for(int e = 0; e < 10000; e++)
@@ -479,84 +452,24 @@ void eventreco(ZEventRecoInput in)
     nSel++;
     
     // now run kinematic reconstruction to restore the top and antitop momenta
-    TLorentzVector t, tbar;
-    // call main routine, see kinReco.h for description
-    int status = KinRecoDilepton(vecLepM, vecLepP, vecJets, preselTree->metPx, preselTree->metPy, t, tbar, hInacc, hAmbig);
-    // returned status is 1 for successfull kinreco, 0 otherwise
-    // t, tbar are vectors with single "best" solution (if kinreco was successfull)
-    //printf("STATUS: %d\n", status);
-    // FULL KINEMATIC RECONSTRUCTION
-    // initialised by -1000 (this default value remains if not correctly reconstructed later)
-    mtt_lkr = -1000.;
-    ytt_lkr = -1000.;
-    pttt_lkr = -1000.;
-    phitt_lkr = -1000.;
-    bool flagPassedKinRec;
-    if (flag_fkr) {
-      //KinematicReconstructionSolutions krSolutions = kinReco->solutions(krLepInd, krAntiLepInd, krJetInd, krBJetInd, leptons, jets, btags, common::TLVtoLV(met));
-      fkr->reset_vars();
-      std::vector<TLorentzVector> solution = fkr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
+    bool flagPassedKinRec = false; // status used to go further to fill histograms
+    TLorentzVector t, tbar; // vectors used to fill histograms
+    for (auto& kr : kinrecos) {
+      kr->reset_vars();
+      std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
       if(solution.size()) {
-        fkr->calculate_vars(solution[0], solution[1], solution[2]);
+        kr->calculate_vars(solution[0], solution[1], solution[2]);
       }
-      //if(flagPassedKinRec == 0)
-      //  continue;
-      //printf("classic: %d %f %f %f %f %f %f\n", krSolutions.numberOfSolutions(),
-      //       krSolutions.solution().neutrino().Px(), krSolutions.solution().neutrino().Py(), krSolutions.solution().neutrino().Pz(),
-      //       krSolutions.solution().antiNeutrino().Px(), krSolutions.solution().antiNeutrino().Py(), krSolutions.solution().antiNeutrino().Pz());
-   
-      if (1==1) {
-        // print results vs generator level
-        // -1000 if not reconstructed
-        mtt_skr = status ? (t+tbar).M() : -1000.;
-        ytt_skr = status ? (t+tbar).Rapidity() : -1000.;
-        pttt_skr = status ? (t+tbar).Pt() : -1000.;
-        phitt_skr = status ? (t+tbar).Phi() : -1000.;
-        TLorentzVector t_gen, tbar_gen;
-        t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
-        tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
-
-      }
-    }
-    TLorentzVector ttbar_lkr;
-    if(flag_lkr){
-      // find best jets: prefer b-tagged jets, among those with equal b-ta number prefer jets with the highest sum of pT, require M(lb) < 180 GeV
-      int bTagBest = 0;
-      float pTSumBest = 0;
-      TLorentzVector jetBest1, jetBest2;
-      for(std::vector<TLorentzVector>::const_iterator jet1 = vecJets.begin(); jet1 != vecJets.end(); jet1++)
-      {
-        if((*jet1+vecLepM).M() > 180 && (*jet1+vecLepP).M() > 180) continue;
-        for(std::vector<TLorentzVector>::const_iterator jet2 = vecJets.begin(); jet2 != vecJets.end(); jet2++)
-        {
-          if((*jet2+vecLepM).M() > 180 && (*jet2+vecLepP).M() > 180) continue;
-          // skip same jets
-          if(jet1 == jet2) continue;
-          // for this pair of jets, calculate number of b-tagged jets,
-          // b-tagged jets are provided with negative masses (see selection.h)
-          int bTag = int(jet1->M() < 0) + int(jet2->M() < 0);
-          if(bTag < bTagBest) continue;
-          // need to reset the best pT sum to 0 if we found a higher b-tag category
-          if(bTag > bTagBest) pTSumBest = 0.;
-          bTagBest = bTag;
-          // calculate the sum of pT
-          float pTSum = jet1->Pt() + jet2->Pt();
-          if(pTSum < pTSumBest) continue;
-          pTSumBest = pTSum;
-          // store these jets
-          if(jet1->M() < 0) jetBest1.SetPtEtaPhiM(jet1->Pt(), jet1->Eta(), jet1->Phi(), -1 * jet1->M());
-          jetBest1 = *jet1;
-          if(jet2->M() < 0) jetBest2.SetPtEtaPhiM(jet2->Pt(), jet2->Eta(), jet2->Phi(), -1 * jet2->M());
-          else jetBest2 = *jet2;
-          // get solution
-          ttbar_lkr = LooseKinReco(vecLepM, vecLepP,jetBest1,jetBest2,preselTree->metPx, preselTree->metPy);
-          mtt_lkr = ttbar_lkr.M();
-          ytt_lkr = ttbar_lkr.Rapidity();
-          pttt_lkr = ttbar_lkr.Pt();
-          phitt_lkr = ttbar_lkr.Phi();
+      // TEMPORARY use SKR solution to fill histograms
+      if (kr->GetName() == "skr") {
+        if(solution.size()) {
+          flagPassedKinRec = true;
+          t = solution[0];
+          tbar = solution[1];
         }
       }
     }
+    // generator level top, tbar and ttbar prticles
     TLorentzVector t_gen, tbar_gen;
     t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
     tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
@@ -564,9 +477,7 @@ void eventreco(ZEventRecoInput in)
     ytt_gen=(t_gen+tbar_gen).Rapidity();
     pttt_gen=(t_gen+tbar_gen).Pt();
     phitt_gen=(t_gen+tbar_gen).Phi();
-    //if(flagPassedKinRec> 0) // succesful fkr
-     if(status>0)// successfull skr
-    //if(mtt_lkr>-999) // succesful lkr
+    if(flagPassedKinRec>0)// successfull skr
     {
       // print the top and antitop momenta, if needed
       //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
@@ -579,8 +490,8 @@ void eventreco(ZEventRecoInput in)
       //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
       FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
     } // end kinreco
-    if (tree) {
-      tree->Fill();
+    if (tree_kr) {
+      tree_kr->Fill();
     }
   } // end event loop
   
@@ -599,10 +510,16 @@ void eventreco(ZEventRecoInput in)
   fout->cd();
   StoreHistos(in.VecVarHisto);
   fout->Close();
-  if (tree) {
+  if (tree_kr) {
     outputFile->cd();
-    tree->Write();
+    tree_kr->Write();
     outputFile->Close();
+  }
+  for (auto& kr : kinrecos) {
+    delete kr;
+  }
+  for (auto& krvar : krvars) {
+    delete krvar;
   }
 }
 

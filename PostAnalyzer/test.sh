@@ -1,5 +1,6 @@
 #!/bin/bash
 start=$(date +%s.%N)
+rm -rf kr_performance/*
 ./ttbarMakeHist config_test.txt
 python kinreco_eff_v3.py ttbar_output_3.root
 python compare_output.py kr_performance ref_ev10000_ch3
