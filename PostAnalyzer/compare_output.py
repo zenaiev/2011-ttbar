@@ -1,10 +1,14 @@
 from glob import glob
 import numpy as np
+import sys
 
 if __name__ == '__main__':
+  if len(sys.argv) < 3:
+    print('ERROR: usage compare_output.py <input directory> <reference directory>')
+    sys.exit(1)
   message = ''
-  testdir = 'kr_performance'
-  refdir = 'ref_ev10000_ch3'
+  testdir = sys.argv[1]
+  refdir = sys.argv[2]
   files_ref = sorted(glob(f'{refdir}/*'))
   if len(files_ref) == 0:
     message += f'Reference directory {refdir} is empty'

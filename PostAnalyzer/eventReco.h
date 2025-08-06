@@ -10,6 +10,7 @@
 #include "kinReco.h"
 #include "selection.h"
 #include "settings.h"
+#include "read_config.h"
 // C++ library or ROOT header files
 #include <map>
 #include <TChain.h>
@@ -216,14 +217,13 @@ class ZEventRecoInput
     bool Gen; // if true, the histogram is filled at true level
     std::vector<TString> VecInFile; // container with input files
     double Weight; // weight for histogram filling
-    long MaxNEvents; // maximum number of processed events
+    std::string nameConfigFile; // option config file
     
     // contstructor
     ZEventRecoInput()
     {
       // set default values
       Weight = 1.0;
-      MaxNEvents = 100e10;
       Gen = false;
     }
     
@@ -300,9 +300,11 @@ void eventreco(ZEventRecoInput in)
 
   // determine number of events
   long nEvents = chain->GetEntries();
+  // read maximum number of events from config file (-1 for no limit)
+  int maxNEvents = read_int(in.nameConfigFile, "maxNEvents", -1);
   //limit it if exceeds the specified maximum number
-  if(nEvents > in.MaxNEvents)
-    nEvents = in.MaxNEvents;
+  if(maxNEvents >=0 && nEvents > maxNEvents)
+    nEvents = maxNEvents;
   printf("nEvents: %ld\n", nEvents);
   TFile *outputFile = nullptr;
   TTree *tree = nullptr;
@@ -346,8 +348,8 @@ void eventreco(ZEventRecoInput in)
       tree->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
     }
   // event loop
-  //for(int e = 0; e < nEvents; e++)
-  for(int e = 0; e < 10000; e++)
+  for(int e = 0; e < nEvents; e++)
+  //for(int e = 0; e < 10000; e++)
   {
     chain->GetEntry(e);
     if(flagMC)

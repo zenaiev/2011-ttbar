@@ -8,12 +8,15 @@
 // additional files from this analysis (look there for description) 
 #include "eventReco.h"
 #include "settings.h"
+#include "read_config.h"
 //
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>> Main function >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 int main(int argc, char** argv)
 {
+  // optional config file passed as a command line parameter
+  std::string nameConfigFile = (argc > 1) ? std::string(argv[1]) : "";
   //
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   // >>>>>>>>>>>>>>>>>>>>> Settings >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -24,12 +27,13 @@ int main(int argc, char** argv)
   TString mcDir = gMcDir;
   //
   // flags what to run
-  bool flagData    = 0; // if 1, data will be processed
-  bool flagMCsig   = 1; // if 1, signal MC (dileptonic decay channel) will be processed
-  bool flagMCother = 0; // if 1, signal MC 'other' decay channels will be processed to form background MC histograms
-  bool flagMCstop  = 0; // if 1, MC single top (background) will be processed
-  bool flagMCwjets = 0; // if 1, MC W+jets (background) will be processed
-  bool flagMCdy    = 0; // if 1, MC Drell-Yan (background) will be processed
+  bool flagData       = read_int(nameConfigFile, "flagData", 1); // if 1, data will be processed
+  bool flagMCsig      = read_int(nameConfigFile, "flagMCsig", 1); // if 1, signal MC (dileptonic decay channel) will be processed
+  bool flagMCsigOther = read_int(nameConfigFile, "flagMCsigOther", 1); // if 1, signal MC (other decay channels, background) will be processed
+  bool flagMCsigGen   = read_int(nameConfigFile, "flagMCsigGen", 1); // if 1, signal MC generator level will be processed
+  bool flagMCstop     = read_int(nameConfigFile, "flagMCstop", 1); // if 1, MC single top (background) will be processed
+  bool flagMCwjets    = read_int(nameConfigFile, "flagMCwjets", 1); // if 1, MC W+jets (background) will be processed
+  bool flagMCdy       = read_int(nameConfigFile, "flagMCdy", 1); // if 1, MC Drell-Yan (background) will be processed
   //
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   //
@@ -86,12 +90,19 @@ int main(int argc, char** argv)
   // add lepton pT histogram at reconstruction level
   // (here you can add more reconstruction level histograms)
   vecVH.push_back(ZVarHisto("ptl", new TH1D("h_ptl", "pT leptons", 23, 30.0, 260.0)));
+
+  // read decay channels from config file (1 ee, 2 mumu, 3 emu)
+  std::vector<int> channels;
+  if(read_int(nameConfigFile, "channel_ee", 1)) channels.push_back(1);
+  if(read_int(nameConfigFile, "channel_mumu", 1)) channels.push_back(2);
+  if(read_int(nameConfigFile, "channel_emu", 1)) channels.push_back(3);
   
   // loop over decay channels (ch = 1 ee, ch = 2 mumu, ch = 3 emu)
   //for(int ch = 1; ch <= 3; ch++)
   for(int ch = 3; ch <= 3; ch++)
   {
     //if(ch != 3) continue; // if you need only emu (for test purpose e.g.)
+    if(std::find(channels.begin(), channels.end(), ch) == channels.end()) continue;
     // 
     // below similar pieces of code come for data and several MC samples, 
     // detailed description is given for the first piece, while later on 
@@ -104,7 +115,7 @@ int main(int argc, char** argv)
     {
       // ZEventRecoInput is a class for event reconstruction, see its description in eventReco.h
       ZEventRecoInput in;
-      //in.MaxNEvents = 100; // if you need to limit the number of processed events
+      in.nameConfigFile = nameConfigFile; // optional config file
       in.Name = "data"; // name pattern for output histograms
       in.Type = 1; // type = 1 for data, 2 for MC signal, 3 for MC 'ttbar other', 4 for the rest of MC background samples
       in.Channel = ch; // decay channel
@@ -131,14 +142,14 @@ int main(int argc, char** argv)
     // Number of events can be obtained from webpage (see http://opendata.cern.ch/collection/CMS-Simulated-Datasets), 
     // but it should be checked that all events have been processed at the Analyzer step (see end of log files)
     //
-    // number of events: 54990752
-    // MC cross section -> theory: 95.43 -> 165.6
-    // weight: 2500.0 / (54990752. / 95.43) * (165.6 / 95.43) = 0.007529
-    if(flagMCsig)
     {
+      // number of events: 54990752
+      // MC cross section -> theory: 95.43 -> 165.6
+      // weight: 2500.0 / (54990752. / 95.43) * (165.6 / 95.43) = 0.007529
+      //
       // MC signal reco level
       ZEventRecoInput in;
-      //in.MaxNEvents = 1000;
+      in.nameConfigFile = nameConfigFile; // optional config file
       in.Weight = 0.007529; // weight (see above)
       in.Name = "mcSigReco";
       in.Type = 2;
@@ -150,17 +161,24 @@ int main(int argc, char** argv)
       in.AddToChain(mcDir + "/TTJets_TuneZ2_7TeV-madgraph-tauola/010002/*.root");
       in.AddToChain(mcDir + "/TTJets_TuneZ2_7TeV-madgraph-tauola/010001/*.root");
       in.AddToChain(mcDir + "/TTJets_TuneZ2_7TeV-madgraph-tauola/00000/*.root");
-      eventreco(in);
+      if(flagMCsig)
+      {
+        eventreco(in);
+      }
       // MC ttbar other (background): re-use existing ZEventRecoInput, just change type
-      /*in.Name = "mcSigOtherReco";
-      in.Type = 3;
-      eventreco(in);
+      if(flagMCsigOther) {
+        in.Name = "mcSigOtherReco";
+        in.Type = 3;
+        eventreco(in);
+      }
       // MC ttbar signal, generator level: again re-use existing ZEventRecoInput, change type and set proper flag (see below)
-      in.Name = "mcSigGen";
-      in.Type = 2;
-      in.VecVarHisto = vecVHGen;
-      in.Gen = true; // flag to notify that generator level should be processed
-      eventreco(in);*/
+      if(flagMCsigGen) {
+        in.Name = "mcSigGen";
+        in.Type = 2;
+        in.VecVarHisto = vecVHGen;
+        in.Gen = true; // flag to notify that generator level should be processed
+        eventreco(in);
+      }
     }
     // *****************************************
     // ************ MC single top **************
@@ -171,7 +189,7 @@ int main(int argc, char** argv)
     if(flagMCstop)
     {
       ZEventRecoInput in;
-      //in.MaxNEvents = 1000;
+      in.nameConfigFile = nameConfigFile; // optional config file
       in.Name = "mcSingleTopReco";
       in.Type = 4;
       in.Weight = 0.02544;
@@ -187,10 +205,10 @@ int main(int argc, char** argv)
     // number of events: 78347691
     // MC cross section -> theory: 25430 -> 31314
     // weight: 2500.0 / (78347691. / (25430. * 0.32)) * (31314. / 25430.) = 0.3197
-    if(flagMCstop)
+    if(flagMCwjets)
     {
       ZEventRecoInput in;
-      //in.MaxNEvents = 1000;
+      in.nameConfigFile = nameConfigFile; // optional config file
       in.Name = "mcWjetsReco";
       in.Weight = 0.3197;
       in.Type = 4;
@@ -204,10 +222,10 @@ int main(int argc, char** argv)
     // *****************************************
     // here separate samples exist for low and high masses, 
     // therefore separate weights calculated below
-    if(flagMCstop)
+    if(flagMCdy)
     {
       ZEventRecoInput in;
-      //in.MaxNEvents = 1000;
+      in.nameConfigFile = nameConfigFile; // optional config file
       in.Type = 4;
       in.Channel = ch;
       in.VecVarHisto = vecVH;
