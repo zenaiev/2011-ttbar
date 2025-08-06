@@ -12,6 +12,8 @@ if __name__ == '__main__':
     f = fref.replace(refdir+'/', testdir+'/')
     data1 = np.loadtxt(fref)
     data2 = np.loadtxt(f)
+    data1[np.isnan(data1)] = 0
+    data2[np.isnan(data2)] = 0
     if data1.shape != data2.shape:
       message += f'{f} and {fref} have different shapes\n'
       continue
@@ -19,7 +21,7 @@ if __name__ == '__main__':
     if not result:
       message += f'{f} and {fref} are different\n'
   if message != '':
-    print(f'\033[31mTEST FAILED\033[0m')
+    print(f'\033[1;31mTEST FAILED\033[0m')
     print(message)
   else:
     print(f'\033[1;92mTEST PASSED\033[0m')

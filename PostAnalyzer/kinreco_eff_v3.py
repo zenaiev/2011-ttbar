@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import sys
 
 # Відкриття дерева
+# Якщо передали ім'я файла як параметр, використовувати його, або файл за замовчуванням
 filename = "ttbar_output_123.root" if len(sys.argv) < 2 else sys.argv[1]
 tree = uproot.open(filename)["ttbarTree"]
 
