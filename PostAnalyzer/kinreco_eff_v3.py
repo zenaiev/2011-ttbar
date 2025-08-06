@@ -101,7 +101,7 @@ for kinreco in kinrecos:
         with open(f'kr_performance/kr_performance_{kinreco}_{variable}.txt', 'w') as f:
             for i in range(len(results[kinreco][variable][0])):
                 for ii in range(len(results[kinreco][variable])):
-                    f.write(f'{results[kinreco][variable][ii][i]:.2e} ')
+                    f.write(f'{results[kinreco][variable][ii][i]:.6e} ')
                 f.write('\n')
 
 # Побудова графіків ефективності
