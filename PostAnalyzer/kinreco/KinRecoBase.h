@@ -41,5 +41,4 @@ class KinRecoBase {
     const std::string _name;
     std::vector<KRVAR*> _krvars;
     std::vector<float> _tree_vars;
-    std::vector<TLorentzVector> _solution; // will be updated at each event
 };
