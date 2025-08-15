@@ -7,15 +7,20 @@
 
 // additional files from this analysis 
 #include "tree.h"
-#include "kinReco.h"
 #include "selection.h"
 #include "settings.h"
+#include "read_config.h"
 // C++ library or ROOT header files
 #include <map>
 #include <TChain.h>
 #include <TCanvas.h>
 #include <TFile.h>
+#include <TH1.h>
 
+// kinematic reconstruction methods
+#include "kinreco/FKR.h"
+#include "kinreco/SKR.h"
+#include "kinreco/LKR.h"
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -81,6 +86,7 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     TH1* histo = VecVarHisto[h].H();
     // now fill histograms depending on the variable:
     // top pT
+    //std::cout<<var<<std::endl;
     if(var == "ptt") 
       histo->Fill(t->Pt(), w);
     // antitop pT
@@ -113,6 +119,47 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     // ttbar invariant mass
     else if(var == "mtt") 
       histo->Fill(ttbar.M(), w);
+    else if(var == "phitt") 
+      histo->Fill(ttbar.Phi(), w);
+    // lepton pT
+    
+    else if(var == "ptl") 
+    {
+      histo->Fill(vecLepM->Pt(), w);
+      histo->Fill(vecLepP->Pt(), w);
+    }
+    // uknown (not implemented) variable
+    // (you can implement more variables here if needed)
+    else
+    {
+      //printf("Error: unknown variable %s\n", var.Data());
+      //exit(1);
+      continue;
+    } // end variable for histo
+  } // end loop over histos
+}
+void FillHistos_lkr(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* ttbar, TLorentzVector* vecLepM = NULL, TLorentzVector* vecLepP = NULL)
+{
+  // loop over provided histograms to be filled
+  for(int h = 0; h < VecVarHisto.size(); h++)
+  {
+    // retrieve variable name
+    TString var = VecVarHisto[h].V();
+    // retrieve histogram
+    TH1* histo = VecVarHisto[h].H();
+    // now fill histograms depending on the variable:
+    // ttbar pT
+    if(var == "pttt") 
+      histo->Fill(ttbar->Pt(), w);
+    // ttbar rapidity
+    else if(var == "ytt") 
+      histo->Fill(ttbar->Rapidity(), w);
+    // ttbar invariant mass
+    else if(var == "mtt") 
+      histo->Fill(ttbar->M(), w);
+    // Azimuthal angle
+    else if(var == "phitt") 
+      histo->Fill(ttbar->Phi(), w);
     // lepton pT
     else if(var == "ptl") 
     {
@@ -164,14 +211,13 @@ class ZEventRecoInput
     bool Gen; // if true, the histogram is filled at true level
     std::vector<TString> VecInFile; // container with input files
     double Weight; // weight for histogram filling
-    long MaxNEvents; // maximum number of processed events
+    std::string nameConfigFile; // option config file
     
     // contstructor
     ZEventRecoInput()
     {
       // set default values
       Weight = 1.0;
-      MaxNEvents = 100e10;
       Gen = false;
     }
     
@@ -230,19 +276,52 @@ void eventreco(ZEventRecoInput in)
   // event counters
   long nSel = 0;
   long nReco = 0;
-  int nGen = 0;
+  long nGen = 0;
   
   // histograms for kinematic reconstruction debugging
   // (not needed in physics analysis, not stored)
-  TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
-  TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
+  //TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
+  //TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
+
+  // vector of kinematic reconstruction methods
+  std::vector<KinRecoBase*> kinrecos;
+  if (read_int(in.nameConfigFile, "kr_FKR", 0)) kinrecos.push_back(new FKR());
+  if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
+  if (read_int(in.nameConfigFile, "kr_LKR", 0)) kinrecos.push_back(new LKR());
+
+  // vector of variables for kinematic reconstruction
+  std::vector<KRVAR*> krvars;
+  if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
+  if (read_int(in.nameConfigFile, "krvar_ytt", 1)) krvars.push_back(new Ytt());
+  if (read_int(in.nameConfigFile, "krvar_pttt", 1)) krvars.push_back(new Pttt());
+  if (read_int(in.nameConfigFile, "krvar_phitt", 1)) krvars.push_back(new Phitt());
 
   // determine number of events
   long nEvents = chain->GetEntries();
+  // read maximum number of events from config file (-1 for no limit)
+  int maxNEvents = read_int(in.nameConfigFile, "maxNEvents", -1);
   //limit it if exceeds the specified maximum number
-  if(nEvents > in.MaxNEvents)
-    nEvents = in.MaxNEvents;
+  if(maxNEvents >=0 && nEvents > maxNEvents)
+    nEvents = maxNEvents;
   printf("nEvents: %ld\n", nEvents);
+  TFile *outputFile = nullptr;
+  // TTree to store kinematic reconstruction output
+  TTree *tree_kr = nullptr;
+  if(in.Name == "mcSigReco") {
+    outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
+    tree_kr = new TTree("ttbarTree", "Tree storing ttbar event variables");
+    for (auto& kr : kinrecos) {
+      kr->init(tree_kr, krvars);
+    }
+  }
+  float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
+  if (tree_kr) {
+    //gen branches
+    tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
+    tree_kr->Branch("phitt_gen", &phitt_gen, "phitt_gen/F");
+    tree_kr->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
+    tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+  }
   // event loop
   for(int e = 0; e < nEvents; e++)
   {
@@ -276,7 +355,7 @@ void eventreco(ZEventRecoInput in)
     if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
       continue;
     // primary dataset name
-    TString inFile = chain->GetCurrentFile()->GetName();
+    //TString inFile = chain->GetCurrentFile()->GetName();
     // select dilepton pair
     TLorentzVector vecLepM, vecLepP;
     double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
@@ -372,14 +451,36 @@ void eventreco(ZEventRecoInput in)
     // event selection done: increment the counter of selected events
     nSel++;
     
-    // now run kinematic reconstruction to restore the top and antitop momenta
-    TLorentzVector t, tbar;
-    // call main routine, see kinReco.h for description
-    int status = KinRecoDilepton(vecLepM, vecLepP, vecJets, preselTree->metPx, preselTree->metPy, t, tbar, hInacc, hAmbig);
-    // returned status is 1 for successfull kinreco, 0 otherwise
-    // t, tbar are vectors with single "best" solution (if kinreco was successfull)
-    //printf("STATUS: %d\n", status);
-    if(status > 0) // successfull kinreco
+    // fill generator level top, tbar and ttbar variables
+    if(tree_kr) {
+      TLorentzVector t_gen, tbar_gen;
+      t_gen.SetXYZM(preselTree->mcT[0], preselTree->mcT[1], preselTree->mcT[2], preselTree->mcT[3]);
+      tbar_gen.SetXYZM(preselTree->mcTbar[0], preselTree->mcTbar[1], preselTree->mcTbar[2], preselTree->mcTbar[3]);
+      mtt_gen=(t_gen+tbar_gen).M();
+      ytt_gen=(t_gen+tbar_gen).Rapidity();
+      pttt_gen=(t_gen+tbar_gen).Pt();
+      phitt_gen=(t_gen+tbar_gen).Phi();
+    }
+
+    // run kinematic reconstruction to restore the top and antitop momenta
+    bool flagPassedKinRec = false; // status used to go further to fill histograms
+    TLorentzVector t, tbar; // vectors used to fill histograms
+    for (auto& kr : kinrecos) {
+      kr->reset_vars();
+      std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
+      if(solution.size()) {
+        kr->calculate_vars(solution[0], solution[1], solution[2]);
+      }
+      // TEMPORARY use SKR solution to fill histograms
+      if (kr->GetName() == "skr") {
+        if(solution.size()) {
+          flagPassedKinRec = true;
+          t = solution[0];
+          tbar = solution[1];
+        }
+      }
+    }
+    if(flagPassedKinRec>0)// successfull skr
     {
       // print the top and antitop momenta, if needed
       //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
@@ -388,8 +489,13 @@ void eventreco(ZEventRecoInput in)
       
       // fill histograms
       double w = in.Weight;
+      //std::cout<<phitt_skr<<std::endl;
+      //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
       FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
     } // end kinreco
+    if (tree_kr) {
+      tree_kr->Fill();
+    }
   } // end event loop
   
   // print the numbers of selected events and events with successfull kinematic reconstruction
@@ -407,6 +513,17 @@ void eventreco(ZEventRecoInput in)
   fout->cd();
   StoreHistos(in.VecVarHisto);
   fout->Close();
+  if (tree_kr) {
+    outputFile->cd();
+    tree_kr->Write();
+    outputFile->Close();
+  }
+  for (auto& kr : kinrecos) {
+    delete kr;
+  }
+  for (auto& krvar : krvars) {
+    delete krvar;
+  }
 }
 
 #endif

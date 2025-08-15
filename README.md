@@ -20,10 +20,11 @@ cd ./WorkingArea
 cmsrel CMSSW_5_3_32
 cd ./CMSSW_5_3_32/src
 cmsenv
-git clone https://github.com/cms-opendata-validation/2011-doubleelectron-doublemu-mueg-ttbar.git
+git clone https://github.com/zenaiev/2011-ttbar.git
+git checkout 2024
 scram b
 cd 2011-doubleelectron-doublemu-mueg-ttbar/Analyzer
-ln -sf /cvmfs/cms-opendata-conddb.cern.ch/FT_53_LV5_AN1_RUNA FT_53_LV5_AN1
+ln -sf /cvmfs/cms-opendata-conddb.cern.ch/FT_53_LV5_AN1 FT_53_LV5_AN1
 ln -sf /cvmfs/cms-opendata-conddb.cern.ch/START53_LV6A1 START53_LV6A1
 ```
 (no need to download data/MC input file lists and JSON: provided with the code)

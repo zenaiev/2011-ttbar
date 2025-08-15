@@ -1,0 +1,27 @@
+# Samples to be processed
+flagData 0
+flagMCsig 1
+flagMCsigOther 0
+flagMCsigGen 0
+flagMCstop 0
+flagMCwjets 0
+flagMCdy 0
+
+# Maximum number of events (-1 to process all events)
+maxNEvents 10000
+
+# Decay channels to process
+channel_ee 0
+channel_mumu 0
+channel_emu 1
+
+# Kinematic reconstruction variants
+kr_SKR 1
+kr_FKR 1
+kr_LKR 1
+
+# Variables for kinematic reconstruction
+krvar_mtt 1
+krvar_ytt 1
+krvar_pttt 1
+krvar_phitt 1

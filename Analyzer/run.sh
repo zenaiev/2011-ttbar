@@ -23,11 +23,13 @@
 # For Monte Carlo (MC) set mc = 1 below, for signal MC also set gen = 1
 #
 # Data
-INPUTLIST='data/CMS_Run2011A_MuEG_AOD_12Oct2013-v1-all_file_index.txt'
+INPUTLIST='data/d1.txt'
+#INPUTLIST='data/CMS_Run2011A_MuEG_AOD_12Oct2013-v1-all_file_index.txt'
 #INPUTLIST='data/CMS_Run2011A_DoubleMu_AOD_12Oct2013-v1-all_file_index.txt'
 #INPUTLIST='data/CMS_Run2011A_DoubleElectron_AOD_12Oct2013-v1-all_file_index.txt'
 #
 # MC ttbar (signal and 'ttbar other' background) - most time consuming!
+#INPUTLIST='mc/mc1.txt'
 #INPUTLIST='mc/TTJets_TuneZ2_7TeV-madgraph-tauola/CMS_MonteCarlo2011_Summer11LegDR_TTJets_TuneZ2_7TeV-madgraph-tauola_AODSIM_PU_S13_START53_LV6-v1_00000_file_index.txt'
 #INPUTLIST='mc/TTJets_TuneZ2_7TeV-madgraph-tauola/CMS_MonteCarlo2011_Summer11LegDR_TTJets_TuneZ2_7TeV-madgraph-tauola_AODSIM_PU_S13_START53_LV6-v1_00001_file_index.txt'
 #INPUTLIST='mc/TTJets_TuneZ2_7TeV-madgraph-tauola/CMS_MonteCarlo2011_Summer11LegDR_TTJets_TuneZ2_7TeV-madgraph-tauola_AODSIM_PU_S13_START53_LV6-v1_010000_file_index.txt'

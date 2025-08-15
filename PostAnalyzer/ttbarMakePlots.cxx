@@ -245,9 +245,11 @@ int main(int argc, char** argv)
     // (channel code is: c1 ee, c2 mumu, c3 emu) 
     c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.eps", plotDir.Data(), ch));
     c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.pdf", plotDir.Data(), ch));
+    c_cp[ch]->SaveAs(TString::Format("%s/cp-c%d.png", plotDir.Data(), ch));
   }
   c_cp[0]->SaveAs(TString::Format("%s/cp.eps", plotDir.Data()));
   c_cp[0]->SaveAs(TString::Format("%s/cp.pdf", plotDir.Data()));
+  c_cp[0]->SaveAs(TString::Format("%s/cp.png", plotDir.Data()));
   //
   // be aware: there are certainly memory leaks (not removing 
   // dynamically allocated objects), although it does not matter here, 
@@ -322,7 +324,13 @@ int main(int argc, char** argv)
   SetCPHRange(hr_cs_mtt);
   csIn.VecHR.push_back(hr_cs_mtt);
   csIn.VecVar.push_back("mtt");
-
+  float pi= TMath::Pi();
+  TH2F* hr_cs_phitt = new TH2F("hr_cs_phitt", "", 1, -pi, pi, 1, 0, 0.3);
+  hr_cs_phitt->GetXaxis()->SetTitle("Phi(t#bar{t}) [GeV]");
+  hr_cs_phitt->GetYaxis()->SetTitle("#frac{1}{#sigma} #frac{d#sigma}{dPhi(t#bar{t})} [GeV^{-1}]");
+  SetCPHRange(hr_cs_phitt);
+  csIn.VecHR.push_back(hr_cs_phitt);
+  csIn.VecVar.push_back("phitt");
   // *** TOP-11-013, Fig. 10, and the total x-section from TOP-13-004 ***
   // (see plots.h for description)
   PlotCS(csIn);
