@@ -50,10 +50,10 @@ public:
     virtual float calculate(const TLorentzVector& t,
                              const TLorentzVector& tbar,
                              const TLorentzVector& ttbar) {
-        const double PI = 3.141592653589793;
+        float pi= TMath::Pi();
         double dphi = fabs(t.Phi() - tbar.Phi());
-        if (dphi > PI)
-            dphi = 2.0 * PI - dphi;
+        if (dphi > pi)
+            dphi = 2.0 * pi - dphi;
         return static_cast<float>(dphi);
     }
 };

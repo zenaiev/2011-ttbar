@@ -21,7 +21,6 @@
 #include "kinreco/FKR.h"
 #include "kinreco/SKR.h"
 #include "kinreco/LKR.h"
-#include "kinreco/LKR2.h"
 
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -296,7 +295,7 @@ void eventreco(ZEventRecoInput in)
   if (read_int(in.nameConfigFile, "kr_FKR", 1)) kinrecos.push_back(new FKR());
   if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
   if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
-  if (read_int(in.nameConfigFile, "kr_LKR2", 1)) kinrecos.push_back(new LKR2());
+
 
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
