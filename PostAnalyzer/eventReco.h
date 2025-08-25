@@ -120,9 +120,14 @@ void FillHistos(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVector* t
     else if(var == "mtt") 
       histo->Fill(ttbar.M(), w);
     else if(var == "phitt") 
-      histo->Fill(ttbar.Phi(), w);
-    // lepton pT
-    
+      histo->Fill(t->Phi(), w);
+    else if(var == "dphitt") 
+    {
+    double dphi = fabs(t->Phi() - tbar->Phi());
+    if (dphi > M_PI) 
+        dphi = 2 * M_PI - dphi;
+    histo->Fill(dphi, w);
+    }
     else if(var == "ptl") 
     {
       histo->Fill(vecLepM->Pt(), w);
@@ -158,6 +163,8 @@ void FillHistos_lkr(std::vector<ZVarHisto>& VecVarHisto, double w, TLorentzVecto
     else if(var == "mtt") 
       histo->Fill(ttbar->M(), w);
     // Azimuthal angle
+    else if(var == "phitt") 
+      histo->Fill(ttbar->Phi(), w);
     else if(var == "phitt") 
       histo->Fill(ttbar->Phi(), w);
     // lepton pT
@@ -289,12 +296,14 @@ void eventreco(ZEventRecoInput in)
   if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
   if (read_int(in.nameConfigFile, "kr_LKR", 0)) kinrecos.push_back(new LKR());
 
+
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
   if (read_int(in.nameConfigFile, "krvar_ytt", 1)) krvars.push_back(new Ytt());
   if (read_int(in.nameConfigFile, "krvar_pttt", 1)) krvars.push_back(new Pttt());
   if (read_int(in.nameConfigFile, "krvar_phitt", 1)) krvars.push_back(new Phitt());
+  if (read_int(in.nameConfigFile, "krvar_dphitt", 1)) krvars.push_back(new Dphitt());
 
   // determine number of events
   long nEvents = chain->GetEntries();
@@ -314,13 +323,14 @@ void eventreco(ZEventRecoInput in)
       kr->init(tree_kr, krvars);
     }
   }
-  float mtt_gen, ytt_gen, pttt_gen, phitt_gen;
+  float mtt_gen, ytt_gen, pttt_gen, phitt_gen, dphitt_gen;
   if (tree_kr) {
     //gen branches
     tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
     tree_kr->Branch("phitt_gen", &phitt_gen, "phitt_gen/F");
     tree_kr->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
     tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
+    tree_kr->Branch("dphitt_gen", &dphitt_gen, "dphitt_gen/F");
   }
   // event loop
   for(int e = 0; e < nEvents; e++)
@@ -460,6 +470,9 @@ void eventreco(ZEventRecoInput in)
       ytt_gen=(t_gen+tbar_gen).Rapidity();
       pttt_gen=(t_gen+tbar_gen).Pt();
       phitt_gen=(t_gen+tbar_gen).Phi();
+      double dphi_gen = fabs(t_gen.Phi() - tbar_gen.Phi());
+      if (dphi_gen > M_PI) dphi_gen = 2 * M_PI - dphi_gen;
+      dphitt_gen = dphi_gen;
     }
 
     // run kinematic reconstruction to restore the top and antitop momenta

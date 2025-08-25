@@ -85,6 +85,11 @@ int main(int argc, char** argv)
     double bins[] = {-1*pi,-0.75*pi,-0.5*pi,-0.25*pi, 0*pi, 0.25*pi, 0.5*pi, 0.75*pi, 1*pi};
     vecVHGen.push_back(ZVarHisto("phitt", new TH1D("h_phitt_cs", "Phi ttbar", 8, bins)));
   }
+    {
+    float pi = TMath::Pi();
+    double bins[] = {-1*pi,-0.75*pi,-0.5*pi,-0.25*pi, 0*pi, 0.25*pi, 0.5*pi, 0.75*pi, 1*pi};
+    vecVHGen.push_back(ZVarHisto("dphitt", new TH1D("h_dphitt_cs", "dPhi ttbar", 8, bins)));
+  }
   // for reconstruction level the same binning is needed
   vecVH = vecVHGen;
   // add lepton pT histogram at reconstruction level

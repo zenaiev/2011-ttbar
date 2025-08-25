@@ -10,7 +10,8 @@ tree = uproot.open(filename)["ttbarTree"]
 
 # Визначення масивів для зчитування
 kinrecos = ['fkr', 'skr', 'lkr']
-variables = ['mtt', 'pttt', 'ytt', 'phitt']
+#inrecos = ['lkr','lkr2']
+variables = ['mtt', 'pttt', 'ytt', 'phitt','dphitt']
 arrays = tree.arrays(
     [f"{v}_{k}" for v in variables for k in kinrecos] + [f"{v}_gen" for v in variables],
     library="np"
@@ -22,20 +23,23 @@ mtt_bins = np.concatenate((np.linspace(340, 450, 5, endpoint=False), np.logspace
 pttt_bins = np.concatenate((np.linspace(0, 100, 5, endpoint=False), np.logspace(np.log10(100), np.log10(250), 5, endpoint=False), np.logspace(np.log10(250), np.log10(800), 8)))
 ytt_bins = [-2.4,-2.0,-1.75] + np.linspace(-1.6, 1.6, 16, endpoint=False).tolist() + [1.75,2.0,2.4]
 phitt_bins = np.linspace(-pi, pi, 9)
+dphitt_bins = np.linspace(-pi, pi, 9)
 
 bins_dict = {
     'mtt': mtt_bins,
     'pttt': pttt_bins,
     'ytt': ytt_bins,
-    'phitt': phitt_bins
+    'phitt': phitt_bins,
+    'dphitt': dphitt_bins
 }
 labels = {
     'mtt': '$M(t\\bar{t})$ [GeV]',
     'pttt': '$p_T(t\\bar{t})$ [GeV]',
     'ytt': '$y(t\\bar{t})$',
-    'phitt': '$\\phi(t\\bar{t})$'
+    'phitt': '$\\phi(t\\bar{t})$',
+    'dphitt': r'$\Delta\phi(t\bar{t})$'
 }
-positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1)}
+positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1), 'dphitt': (0, 2)}
 # Функція обчислення
 def calculate_efficiency(reco, gen, bins, variable):
     bin_centers = []
@@ -106,7 +110,7 @@ for kinreco in kinrecos:
                 f.write('\n')
 
 # Побудова графіків ефективності
-fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
+fig_eff, axs_eff = plt.subplots(3, 3, figsize=(12, 12))
 fig_eff.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 
@@ -128,7 +132,7 @@ fig_eff.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\
 fig_eff.savefig('plots/efficiency.pdf')
 fig_eff.savefig('plots/efficiency.png')
 
-fig_bias, axs_bias = plt.subplots(2, 2, figsize=(7, 7))
+fig_bias, axs_bias = plt.subplots(3, 3, figsize=(12, 12))
 fig_bias.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 for variable in variables:
@@ -148,7 +152,7 @@ fig_bias.savefig('plots/bias.pdf')
 fig_bias.savefig('plots/bias.png')
 
 
-fig_res, axs_res = plt.subplots(2, 2, figsize=(7, 7))
+fig_res, axs_res = plt.subplots(3, 3, figsize=(12, 12))
 fig_res.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 for variable in variables:
