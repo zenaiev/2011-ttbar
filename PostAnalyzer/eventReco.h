@@ -292,9 +292,9 @@ void eventreco(ZEventRecoInput in)
 
   // vector of kinematic reconstruction methods
   std::vector<KinRecoBase*> kinrecos;
-  if (read_int(in.nameConfigFile, "kr_FKR", 1)) kinrecos.push_back(new FKR());
+  if (read_int(in.nameConfigFile, "kr_FKR", 0)) kinrecos.push_back(new FKR());
   if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
-  if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
+  if (read_int(in.nameConfigFile, "kr_LKR", 0)) kinrecos.push_back(new LKR());
 
 
   // vector of variables for kinematic reconstruction
