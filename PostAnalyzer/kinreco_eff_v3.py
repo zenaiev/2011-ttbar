@@ -5,12 +5,13 @@ import sys
 
 # Відкриття дерева
 # Якщо передали ім'я файла як параметр, використовувати його, або файл за замовчуванням
-filename = "ttbar_output_123.root" if len(sys.argv) < 2 else sys.argv[1]
+filename = "ttbar_output_3_lkrv2_main_fixed.root" if len(sys.argv) < 2 else sys.argv[1]
 tree = uproot.open(filename)["ttbarTree"]
 
 # Визначення масивів для зчитування
-kinrecos = ['fkr', 'skr', 'lkr']
-variables = ['mtt', 'pttt', 'ytt', 'phitt']
+#kinrecos = ['lkrv2']
+kinrecos = ['lkr','lkrv2','lkrv2_rejected']
+variables = ['mtt', 'pttt', 'ytt', 'phitt',]
 arrays = tree.arrays(
     [f"{v}_{k}" for v in variables for k in kinrecos] + [f"{v}_gen" for v in variables],
     library="np"
@@ -22,20 +23,23 @@ mtt_bins = np.concatenate((np.linspace(340, 450, 5, endpoint=False), np.logspace
 pttt_bins = np.concatenate((np.linspace(0, 100, 5, endpoint=False), np.logspace(np.log10(100), np.log10(250), 5, endpoint=False), np.logspace(np.log10(250), np.log10(800), 8)))
 ytt_bins = [-2.4,-2.0,-1.75] + np.linspace(-1.6, 1.6, 16, endpoint=False).tolist() + [1.75,2.0,2.4]
 phitt_bins = np.linspace(-pi, pi, 9)
+dphitt_bins = np.linspace(-pi, pi, 9)
 
 bins_dict = {
     'mtt': mtt_bins,
     'pttt': pttt_bins,
     'ytt': ytt_bins,
-    'phitt': phitt_bins
+    'phitt': phitt_bins,
+    'dphitt': dphitt_bins
 }
 labels = {
     'mtt': '$M(t\\bar{t})$ [GeV]',
     'pttt': '$p_T(t\\bar{t})$ [GeV]',
     'ytt': '$y(t\\bar{t})$',
-    'phitt': '$\\phi(t\\bar{t})$'
+    'phitt': '$\\phi(t\\bar{t})$',
+    'dphitt': r'$\Delta\phi(t\bar{t})$'
 }
-positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1)}
+positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1), 'dphitt': (0, 2)}
 # Функція обчислення
 def calculate_efficiency(reco, gen, bins, variable):
     bin_centers = []
@@ -106,7 +110,7 @@ for kinreco in kinrecos:
                 f.write('\n')
 
 # Побудова графіків ефективності
-fig_eff, axs_eff = plt.subplots(2, 2, figsize=(7, 7))
+fig_eff, axs_eff = plt.subplots(3, 3, figsize=(12, 12))
 fig_eff.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 
@@ -128,7 +132,7 @@ fig_eff.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\
 fig_eff.savefig('plots/efficiency.pdf')
 fig_eff.savefig('plots/efficiency.png')
 
-fig_bias, axs_bias = plt.subplots(2, 2, figsize=(7, 7))
+fig_bias, axs_bias = plt.subplots(3, 3, figsize=(12, 12))
 fig_bias.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 for variable in variables:
@@ -148,7 +152,7 @@ fig_bias.savefig('plots/bias.pdf')
 fig_bias.savefig('plots/bias.png')
 
 
-fig_res, axs_res = plt.subplots(2, 2, figsize=(7, 7))
+fig_res, axs_res = plt.subplots(3, 3, figsize=(12, 12))
 fig_res.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
 for variable in variables:
@@ -167,3 +171,39 @@ fig_res.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\
 fig_res.savefig('plots/resolution.pdf')
 fig_res.savefig('plots/resolution.png')
 
+fig_ratio, axs_ratio = plt.subplots(3, 3, figsize=(12, 12))
+fig_ratio.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
+
+#відношення роздільних здатностей
+for variable in variables:
+    i, j = positions[variable]
+
+    # Бін-центри однакові для всіх реконструкцій
+    bin_centers = results['lkr'][variable][0]
+
+    # Резолюшни
+    res_lkr       = np.array(results['lkr'][variable][5])
+    res_lkrv2     = np.array(results['lkrv2'][variable][5])
+    res_rejected  = np.array(results['lkrv2_rejected'][variable][5])
+
+    # Відношення
+    ratio_lkr_over_lkr      = res_lkr / res_lkr                # =1
+    ratio_lkrv2_over_lkr    = res_lkrv2 / res_lkr
+    ratio_rejected_over_lkr = res_rejected / res_lkr
+
+    axs_ratio[i, j].plot(bin_centers, ratio_lkr_over_lkr, 'o',linestyle='-', label="LKR / LKR", markersize=5)
+    axs_ratio[i, j].plot(bin_centers, ratio_lkrv2_over_lkr, 'o',linestyle='-', label="LKRv2 / LKR", markersize=5)
+    axs_ratio[i, j].plot(bin_centers, ratio_rejected_over_lkr, 'o',linestyle='-', label="LKRv2(rejected) / LKR", markersize=5)
+
+    axs_ratio[i, j].axhline(1.0, color='gray', linestyle='--', linewidth=1)
+
+    axs_ratio[i, j].set_xlabel(labels[variable])
+    axs_ratio[i, j].set_ylabel("Resolution ratio")
+
+    axs_ratio[i, j].set_ylim(0.9, 1.6)
+    axs_ratio[i, j].grid(True)
+    axs_ratio[i, j].legend()
+
+fig_ratio.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV\nRatio of resolution: new/old reconstruction')
+fig_ratio.savefig('plots/resolution_ratio.pdf')
+fig_ratio.savefig('plots/resolution_ratio.png')

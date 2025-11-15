@@ -43,3 +43,19 @@ class Phitt : public KRVAR {
       return ttbar.Phi();
     }
 };
+class Dphitt : public KRVAR {
+public:
+    Dphitt() : KRVAR("dphitt") {}
+
+    virtual float calculate(const TLorentzVector& t,
+                             const TLorentzVector& tbar,
+                             const TLorentzVector& ttbar) {
+        float pi= TMath::Pi();
+        double dphi = fabs(t.Phi() - tbar.Phi());
+        if (dphi > pi)
+            dphi = 2.0 * pi - dphi;
+        return static_cast<float>(dphi);
+    }
+};
+
+
