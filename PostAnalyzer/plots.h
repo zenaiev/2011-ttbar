@@ -121,7 +121,7 @@ void PlotCS(const ZPlotCSInput& in)
   c_cs = new TCanvas("ccs", "", 1200, 800);
   c_cs->Divide(3, 2, 0.0001);
   // loop over variables 
-  for(int v = 0; v < 6; v++)
+  for(int v = 0; v < 7; v++)
   {
     c_cs->cd(v + 1);
     if(v == 4)

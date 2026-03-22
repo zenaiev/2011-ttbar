@@ -1,9 +1,9 @@
-#include "LKRv2.h"
+#include "LKRv3.h"
 #include "krvars.h"
 
-LKRv2::LKRv2() : KinRecoBase("lkrv2") {}
+LKRv3::LKRv3() : KinRecoBase("lkrv3") {}
 
-std::vector<TLorentzVector> LKRv2::reconstruct(
+std::vector<TLorentzVector> LKRv3::reconstruct(
     const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
     const std::vector<TLorentzVector>& vecJets, Float_t* jetBTagDiscr, const double bTagDiscrL,
     const Float_t metPx, const Float_t metPy) {
@@ -18,7 +18,7 @@ std::vector<TLorentzVector> LKRv2::reconstruct(
   }
   return solution;
 }
-bool LKRv2::selectBestJets(
+bool LKRv3::selectBestJets(
     const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
     const std::vector<TLorentzVector>& vecJets, Float_t* jetBTagDiscr,
     const double bTagDiscrL, TLorentzVector& jetBest1, TLorentzVector& jetBest2) {
@@ -54,9 +54,8 @@ bool LKRv2::selectBestJets(
                 // перевірка й відкидання випадку, де true належать одному джету або одному лептону./
                   if (sameJet1 || sameJet2 || sameLepM || sameLepP)
                         continue;
-                       //rejectedByLKRv2 = true;
+                
             }
-             //if (!rejectedByLKRv2) continue;
 
         int bTag = int(jet1->M() < 0) + int(jet2->M() < 0);
         if(bTag < bTagBest) continue;
@@ -79,26 +78,29 @@ bool LKRv2::selectBestJets(
     return foundPair;
 }
 
-TLorentzVector LKRv2::solve(const TLorentzVector& lepton, const TLorentzVector& antilepton,
-                                           const TLorentzVector& bjet, const TLorentzVector& bbarjet,
-                                           float met_x, float met_y) {
+TLorentzVector LKRv3::solve(const TLorentzVector& lepton, const TLorentzVector& antilepton,
+                          const TLorentzVector& bjet, const TLorentzVector& bbarjet,
+                          float met_x, float met_y) {
   TLorentzVector llbar = lepton + antilepton;
   TLorentzVector nunubar;
+  
   nunubar.SetPx(met_x);
   nunubar.SetPy(met_y);
-  if(nunubar.Pt() < llbar.E()) {
-    nunubar.SetPz(llbar.Pz());
-  }
-  else {
-    nunubar.SetPz(0.);
-  }
-  if(nunubar.P() < llbar.E()) {
-    nunubar.SetE(llbar.E());
-  }
-  else {
-    nunubar.SetE(nunubar.P());
-  }
+
+  double mass_ll = llbar.M();
+  double rap_ll = llbar.Rapidity();
+  
+  double pt_nunu = nunubar.Pt();
+  double mt_nunu = TMath::Sqrt(mass_ll * mass_ll + pt_nunu * pt_nunu);
+
+  double pz_nunu = mt_nunu * TMath::SinH(rap_ll);
+  double e_nunu  = mt_nunu * TMath::CosH(rap_ll);
+
+  nunubar.SetPz(pz_nunu);
+  nunubar.SetE(e_nunu);
+
   assert(nunubar.M()>=-0.001);
+  
   TLorentzVector llnn = llbar + nunubar;
   const double mw = 80.4;
   if(llnn.M() < (2.0 * mw)) {
@@ -106,6 +108,7 @@ TLorentzVector LKRv2::solve(const TLorentzVector& lepton, const TLorentzVector& 
     const double zNew =eNew * TMath::TanH(llnn.Rapidity());
     llnn = TLorentzVector(llnn.X(), llnn.Y(), zNew, eNew);
   }
+  
   TLorentzVector ttbar = llnn + bjet + bbarjet;
   return ttbar;
 }

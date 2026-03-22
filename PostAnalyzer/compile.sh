@@ -5,6 +5,8 @@ KINRECOCODE='kinreco/FKR.cxx fkr/analysisUtils.cc fkr/KinematicReconstruction.cc
 KINRECOCODE+='kinreco/SKR.cxx '
 KINRECOCODE+='kinreco/LKR.cxx '
 KINRECOCODE+='kinreco/LKRv2.cxx '
+KINRECOCODE+='kinreco/LKRv2_rejected.cxx '
+KINRECOCODE+='kinreco/LKRv3.cxx '
 g++ $KINRECOCODE ttbarMakeHist.cxx read_config.cxx -o ttbarMakeHist `root-config --cflags --libs` -lMathMore -I.
 g++ ttbarMakePlots.cxx -o ttbarMakePlots `root-config --cflags --libs`
 

@@ -331,6 +331,12 @@ int main(int argc, char** argv)
   SetCPHRange(hr_cs_phitt);
   csIn.VecHR.push_back(hr_cs_phitt);
   csIn.VecVar.push_back("phitt");
+  TH2F* hr_cs_dphitt = new TH2F("hr_cs_dphitt", "", 1, 0, pi, 1, 0, 1.4);
+  hr_cs_dphitt->GetXaxis()->SetTitle("#Delta#phi(t#bar{t}) [GeV]");
+  hr_cs_dphitt->GetYaxis()->SetTitle("#frac{1}{#sigma} #frac{d#sigma}{d#Delta#phi(t#bar{t})} [GeV^{-1}]");
+  SetCPHRange(hr_cs_dphitt);
+  csIn.VecHR.push_back(hr_cs_dphitt);
+  csIn.VecVar.push_back("dphitt");
   // *** TOP-11-013, Fig. 10, and the total x-section from TOP-13-004 ***
   // (see plots.h for description)
   PlotCS(csIn);
