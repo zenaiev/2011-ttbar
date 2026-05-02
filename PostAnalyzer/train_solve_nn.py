@@ -6,13 +6,13 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
-IN_DIM       = 31     
+IN_DIM       = 31     # "ОЧІ" УВІМКНЕНО (26 сирих + 5 підказок LKRv3)
 OUT_DIM      = 3      
-BATCH_SIZE   = 2048
-LR           = 1e-3     
-WEIGHT_DECAY = 1e-4     # Зменшили регуляризацію
-PATIENCE     = 50
-EPOCHS       = 500
+BATCH_SIZE   = 4096   # Максимально плавні градієнти
+LR           = 5e-4
+WEIGHT_DECAY = 1e-2   # Жорстка регуляризація: утримуємо ваги біля нуля
+PATIENCE     = 50       
+EPOCHS       = 800
 SEED         = 42
 
 torch.manual_seed(SEED)
@@ -169,6 +169,7 @@ def process_single_batch(args):
         tgt = ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars)
         if not np.all(np.isfinite(tgt)): skipped += 1; continue
 
+        # ТУТ ДОДАНО ЗМІННІ lkr_vars (31 ознака)
         feat = np.array(cart(lM) + cart(lP) + cart(jb1) + cart(jb2) +
                 [float(met_px[i]), float(met_py[i]), m_lpj1, m_lmj2, ht,
                  llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m,
@@ -180,7 +181,7 @@ def process_single_batch(args):
     return inputs, targets, lkr_list, skipped
 
 def load_and_prepare(filename, treename="tree"):
-    print(f"[I] Відкриваємо {filename}:{treename} (ОПТИМІЗОВАНЕ ЗАВАНТАЖЕННЯ)")
+    print(f"[I] Відкриваємо {filename}:{treename}")
     with uproot.open(f"{filename}:{treename}") as tree: total_events = tree.num_entries
     
     step_size = 50000
@@ -226,6 +227,7 @@ class SolveDataset(Dataset):
                 xi[base]    = px*c - py*s
                 xi[base+1]  = px*s + py*c
                 
+            # Аугментація для кутів LKRv3
             sp_in, cp_in = xi[29], xi[30]
             xi[29] = sp_in*c + cp_in*s
             xi[30] = cp_in*c - sp_in*s
@@ -234,7 +236,6 @@ class SolveDataset(Dataset):
         return torch.from_numpy(xi), torch.from_numpy(yi)
 
 class ResBlock(nn.Module):
-    # ПРИБРАЛИ DROPOUT
     def __init__(self, dim):
         super().__init__()
         self.net = nn.Sequential(nn.Linear(dim, dim), nn.LayerNorm(dim), nn.SiLU(), nn.Linear(dim, dim), nn.LayerNorm(dim))
@@ -244,16 +245,19 @@ class ResBlock(nn.Module):
 class SolveMLP(nn.Module):
     def __init__(self, in_dim=IN_DIM, out_dim=OUT_DIM):
         super().__init__()
-        dim = 128 # Трішки збільшили "мозок", щоб згладити шум
+        dim = 128
         self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
-        # ТРИ БЛОКИ без дропауту
         self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim)) 
         self.head = nn.Linear(dim, out_dim)
         
         nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
         
-    def forward(self, x): return self.head(self.blocks(self.input_proj(x)))
+    def forward(self, x): 
+        raw = self.head(self.blocks(self.input_proj(x)))
+        # МІКРО-ПОВІДОК (15%)
+        scale = torch.tensor([0.15, 0.2, 0.2], device=raw.device)
+        return torch.tanh(raw) * scale
 
 class EarlyStopping:
     def __init__(self, patience=PATIENCE):
@@ -274,22 +278,17 @@ def train(args):
     n_tr, n_val = int(0.70*N), int(0.15*N)
     idx_tr, idx_val, idx_te = idx[:n_tr], idx[n_tr:n_tr+n_val], idx[n_tr+n_val:]
 
-    mtt_gen_tr = lkr[idx_tr, 0] * np.exp(y[idx_tr, 0])
-    weights_tr = np.clip(mtt_gen_tr / 400.0, 1.0, 3.0).astype(np.float32)
-
     ds_tr = SolveDataset(X[idx_tr], y[idx_tr], augment=True)
     norm = ds_tr.norm
     ds_val = SolveDataset(X[idx_val], y[idx_val], norm, augment=False)
 
     with open(os.path.join(args.outdir, "norm_stats.json"), "w") as f: json.dump(norm, f, indent=2)
 
-    sampler_tr = torch.utils.data.WeightedRandomSampler(weights=torch.from_numpy(weights_tr), num_samples=len(ds_tr), replacement=True)
-    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, sampler=sampler_tr, num_workers=2, pin_memory=True)
-    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=2, pin_memory=True)
+    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True)
 
     model, stopper = SolveMLP().to(device), EarlyStopping(PATIENCE)
-    # ПОВЕРНУЛИ MSELoss для ідеальної роздільної здатності
-    criterion = nn.MSELoss()
+    criterion = nn.HuberLoss(delta=1.0) 
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs, eta_min=LR*1e-2)
 

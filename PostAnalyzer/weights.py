@@ -16,7 +16,6 @@ def create_weights():
     assert hasattr(model, 'blocks'),     "[ERROR] Немає blocks"
     assert hasattr(model, 'head'),       "[ERROR] Немає head"
     
-    # ТЕПЕР ОЧІКУЄМО 3 БЛОКИ!
     assert len(model.blocks) == 3, f"[ERROR] Очікується 3 ResBlocks, знайдено {len(model.blocks)}"
 
     with open(f"{out_dir}/norm_stats.json", "r") as f:

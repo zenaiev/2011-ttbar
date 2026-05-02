@@ -125,8 +125,11 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     float log_mtt_lkrv3   = std::log(std::max(mtt_lkrv3_val, 300.f));
     float log_pttt_lkrv3  = std::log(pttt_lkr + 1.0f);
-
-    // ── 3. Вхідний вектор (26 ОЗНАК) ───────────────────────────
+    // ПОВЕРТАЄМО ОБЧИСЛЕННЯ КУТІВ:
+    float sin_phitt_lkrv3 = std::sin(phitt_lkr);
+    float cos_phitt_lkrv3 = std::cos(phitt_lkr);
+    
+    // ── 3. Вхідний вектор (РІВНО 31 ОЗНАКА - "ОЧІ" УВІМКНЕНО) ───────────
     std::vector<float> x = {
         (float)vecLepM.E(),  (float)vecLepM.Px(), (float)vecLepM.Py(), (float)vecLepM.Pz(),
         (float)vecLepP.E(),  (float)vecLepP.Px(), (float)vecLepP.Py(), (float)vecLepP.Pz(),
@@ -134,14 +137,20 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
         (float)j2.E(),  (float)j2.Px(), (float)j2.Py(), (float)j2.Pz(),
         metPx, metPy,
         m_lpj1, m_lmj2, ht,
-        llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m
+        llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m,
+        // ДОДАНІ 5 ПІДКАЗОК МАСШТАБУ:
+        log_mtt_lkrv3,
+        log_pttt_lkrv3,
+        ytt_lkr,
+        sin_phitt_lkrv3,
+        cos_phitt_lkrv3
     };
 
     // ── 4. Нормалізація входу ─────────────────────────────────────────────────
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = (x[i] - x_mean[i]) / (x_std[i] + 1e-8f);
 
-    // ── 5. Інференс (ТІЛЬКИ 2 БЛОКИ!) ───────────────────────────
+    // ── 5. Інференс (3 БЛОКИ) ───────────────────────────
     using namespace NNWeights;
     auto h = linear_layer(x, input_proj_0_weight, input_proj_0_bias);
     h = layer_norm(h, input_proj_1_weight, input_proj_1_bias);
@@ -149,20 +158,20 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     h = res_block(h, blocks_0_net_0_weight, blocks_0_net_0_bias, blocks_0_net_1_weight, blocks_0_net_1_bias, blocks_0_net_3_weight, blocks_0_net_3_bias, blocks_0_net_4_weight, blocks_0_net_4_bias);
     h = res_block(h, blocks_1_net_0_weight, blocks_1_net_0_bias, blocks_1_net_1_weight, blocks_1_net_1_bias, blocks_1_net_3_weight, blocks_1_net_3_bias, blocks_1_net_4_weight, blocks_1_net_4_bias);
-    // ДОДАНО ТРЕТІЙ БЛОК:
     h = res_block(h, blocks_2_net_0_weight, blocks_2_net_0_bias, blocks_2_net_1_weight, blocks_2_net_1_bias, blocks_2_net_3_weight, blocks_2_net_3_bias, blocks_2_net_4_weight, blocks_2_net_4_bias);
 
     auto out = linear_layer(h, head_weight, head_bias);
 
-    // ── 6. ВІДНОВЛЕННЯ ІЗ ЗАЛИШКІВ ──────────────────────────────────────────
-    float d_log_mtt  = out[0];
-    float d_log_pttt = out[1];
-    float d_ytt      = out[2];
+    // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
+    // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!
+    float d_log_mtt  = std::tanh(out[0]) * 0.3f;
+    float d_log_pttt = std::tanh(out[1]) * 0.5f;
+    float d_ytt      = std::tanh(out[2]) * 0.5f;
 
     const float mtt   = std::exp(log_mtt_lkrv3 + d_log_mtt);
     const float pttt  = std::exp(log_pttt_lkrv3 + d_log_pttt) - 1.0f;
     const float ytt   = ytt_lkr + d_ytt;
-    const float phitt = phitt_lkr; 
+    const float phitt = phitt_lkr;
 
     if (mtt <= 0.f || pttt < 0.f) return solution;
 
