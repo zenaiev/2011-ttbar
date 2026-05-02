@@ -6,11 +6,12 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
-IN_DIM       = 31     # "ОЧІ" УВІМКНЕНО (26 сирих + 5 підказок LKRv3)
+# 1. АБСОЛЮТНА СЛІПОТА (Ніяких підказок масштабу)
+IN_DIM       = 26     
 OUT_DIM      = 3      
-BATCH_SIZE   = 4096   # Максимально плавні градієнти
+BATCH_SIZE   = 4096   
 LR           = 5e-4
-WEIGHT_DECAY = 1e-2   # Жорстка регуляризація: утримуємо ваги біля нуля
+WEIGHT_DECAY = 1e-2   
 PATIENCE     = 50       
 EPOCHS       = 800
 SEED         = 42
@@ -169,11 +170,10 @@ def process_single_batch(args):
         tgt = ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars)
         if not np.all(np.isfinite(tgt)): skipped += 1; continue
 
-        # ТУТ ДОДАНО ЗМІННІ lkr_vars (31 ознака)
+        # ВИДАЛЕНО lkr_vars - РІВНО 26 ОЗНАК
         feat = np.array(cart(lM) + cart(lP) + cart(jb1) + cart(jb2) +
                 [float(met_px[i]), float(met_py[i]), m_lpj1, m_lmj2, ht,
-                 llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m,
-                 lkr_vars[0], lkr_vars[1], lkr_vars[2], lkr_vars[3], lkr_vars[4]], dtype=np.float32)
+                 llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m], dtype=np.float32)
 
         if not np.all(np.isfinite(feat)): skipped += 1; continue
         inputs.append(feat); targets.append(tgt); lkr_list.append(np.array([mtt_lkr, pttt_lkr, ytt_lkr, phitt_lkr], dtype=np.float32))
@@ -226,11 +226,6 @@ class SolveDataset(Dataset):
                 px, py = xi[base], xi[base + 1]
                 xi[base]    = px*c - py*s
                 xi[base+1]  = px*s + py*c
-                
-            # Аугментація для кутів LKRv3
-            sp_in, cp_in = xi[29], xi[30]
-            xi[29] = sp_in*c + cp_in*s
-            xi[30] = cp_in*c - sp_in*s
 
         xi = (xi - self.xm) / self.xs
         return torch.from_numpy(xi), torch.from_numpy(yi)
@@ -255,8 +250,8 @@ class SolveMLP(nn.Module):
         
     def forward(self, x): 
         raw = self.head(self.blocks(self.input_proj(x)))
-        # МІКРО-ПОВІДОК (15%)
-        scale = torch.tensor([0.15, 0.2, 0.2], device=raw.device)
+        # МІКРО-ПОВІДОК (10% для маси) - Більше не можна розмазати поріг!
+        scale = torch.tensor([0.10, 0.2, 0.2], device=raw.device)
         return torch.tanh(raw) * scale
 
 class EarlyStopping:
@@ -288,7 +283,8 @@ def train(args):
     loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True)
 
     model, stopper = SolveMLP().to(device), EarlyStopping(PATIENCE)
-    criterion = nn.HuberLoss(delta=1.0) 
+    # L1 LOSS: Стимулює видавати рівно 0, якщо немає чіткого сигналу. Вбиває регресію до середнього.
+    criterion = nn.L1Loss() 
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs, eta_min=LR*1e-2)
 

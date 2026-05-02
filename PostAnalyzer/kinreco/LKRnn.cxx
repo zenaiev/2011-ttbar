@@ -137,13 +137,7 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
         (float)j2.E(),  (float)j2.Px(), (float)j2.Py(), (float)j2.Pz(),
         metPx, metPy,
         m_lpj1, m_lmj2, ht,
-        llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m,
-        // ДОДАНІ 5 ПІДКАЗОК МАСШТАБУ:
-        log_mtt_lkrv3,
-        log_pttt_lkrv3,
-        ytt_lkr,
-        sin_phitt_lkrv3,
-        cos_phitt_lkrv3
+        llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m
     };
 
     // ── 4. Нормалізація входу ─────────────────────────────────────────────────
@@ -164,9 +158,9 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
     // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!
-    float d_log_mtt  = std::tanh(out[0]) * 0.3f;
-    float d_log_pttt = std::tanh(out[1]) * 0.5f;
-    float d_ytt      = std::tanh(out[2]) * 0.5f;
+    float d_log_mtt  = std::tanh(out[0]) * 0.10f;
+    float d_log_pttt = std::tanh(out[1]) * 0.20f;
+    float d_ytt      = std::tanh(out[2]) * 0.20f;
 
     const float mtt   = std::exp(log_mtt_lkrv3 + d_log_mtt);
     const float pttt  = std::exp(log_pttt_lkrv3 + d_log_pttt) - 1.0f;

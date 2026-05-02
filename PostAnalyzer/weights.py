@@ -21,7 +21,7 @@ def create_weights():
     with open(f"{out_dir}/norm_stats.json", "r") as f:
         norm = json.load(f)
 
-    assert len(norm["x_mean"]) == 31, f"[ERROR] x_mean має {len(norm['x_mean'])} елементів, очікується 31"
+    assert len(norm["x_mean"]) == 26, f"[ERROR] x_mean має {len(norm['x_mean'])} елементів, очікується 26"
 
     output_path = "kinreco/nn_weights.h"
     with open(output_path, "w") as f:
