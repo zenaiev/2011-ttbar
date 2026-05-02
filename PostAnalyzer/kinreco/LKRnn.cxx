@@ -125,11 +125,10 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     float log_mtt_lkrv3   = std::log(std::max(mtt_lkrv3_val, 300.f));
     float log_pttt_lkrv3  = std::log(pttt_lkr + 1.0f);
-    // ПОВЕРТАЄМО ОБЧИСЛЕННЯ КУТІВ:
     float sin_phitt_lkrv3 = std::sin(phitt_lkr);
     float cos_phitt_lkrv3 = std::cos(phitt_lkr);
     
-    // ── 3. Вхідний вектор (РІВНО 31 ОЗНАКА - "ОЧІ" УВІМКНЕНО) ───────────
+    // ── 3. Вхідний вектор (РІВНО 26 ОЗНАК) ───────────
     std::vector<float> x = {
         (float)vecLepM.E(),  (float)vecLepM.Px(), (float)vecLepM.Py(), (float)vecLepM.Pz(),
         (float)vecLepP.E(),  (float)vecLepP.Px(), (float)vecLepP.Py(), (float)vecLepP.Pz(),
@@ -138,7 +137,7 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
         metPx, metPy,
         m_lpj1, m_lmj2, ht,
         llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m
-    };
+    }; // ЗАКІНЧУЄТЬСЯ НА llnn_m!
 
     // ── 4. Нормалізація входу ─────────────────────────────────────────────────
     for (size_t i = 0; i < x.size(); ++i)
@@ -167,6 +166,8 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
     const float ytt   = ytt_lkr + d_ytt;
     const float phitt = phitt_lkr;
 
+    // Надійний захист від NaN та нефізичних значень
+    if (std::isnan(mtt) || mtt <= 0.f || std::isnan(pttt) || pttt < 0.f) return solution;
     if (mtt <= 0.f || pttt < 0.f) return solution;
 
     // ── 7. Побудова ttbar TLorentzVector ─────────────────────────────────────

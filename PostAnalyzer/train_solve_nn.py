@@ -6,8 +6,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
-# 1. АБСОЛЮТНА СЛІПОТА (Ніяких підказок масштабу)
-IN_DIM       = 26     
+# --- ЗОЛОТИЙ СТАНДАРТ (найкращий результат) ---
+IN_DIM       = 26     # Абсолютна сліпота
 OUT_DIM      = 3      
 BATCH_SIZE   = 4096   
 LR           = 5e-4
@@ -18,6 +18,10 @@ SEED         = 42
 
 torch.manual_seed(SEED)
 np.random.seed(SEED)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(SEED)
+    # Оптимізація для відеокарт NVIDIA
+    torch.backends.cudnn.benchmark = True
 
 def invariant_mass_2body(pt1, eta1, phi1, e1, pt2, eta2, phi2, e2):
     px = pt1*np.cos(phi1) + pt2*np.cos(phi2)
@@ -170,7 +174,7 @@ def process_single_batch(args):
         tgt = ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars)
         if not np.all(np.isfinite(tgt)): skipped += 1; continue
 
-        # ВИДАЛЕНО lkr_vars - РІВНО 26 ОЗНАК
+        # РІВНО 26 ОЗНАК
         feat = np.array(cart(lM) + cart(lP) + cart(jb1) + cart(jb2) +
                 [float(met_px[i]), float(met_py[i]), m_lpj1, m_lmj2, ht,
                  llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m], dtype=np.float32)
@@ -200,8 +204,7 @@ def load_and_prepare(filename, treename="tree"):
     return X, y, lkr
 
 class SolveDataset(Dataset):
-    def __init__(self, X, y, norm=None, augment=False):
-        self.augment = augment
+    def __init__(self, X, y, norm=None):
         if norm is None:
             norm = {
                 "x_mean": X.mean(axis=0).tolist(),
@@ -216,18 +219,9 @@ class SolveDataset(Dataset):
     def __len__(self): return len(self.X_raw)
 
     def __getitem__(self, i):
-        xi = self.X_raw[i].copy()
-        yi = self.y_raw[i].copy()
-
-        if self.augment:
-            alpha = np.random.uniform(0, 2*np.pi)
-            c, s  = np.float32(np.cos(alpha)), np.float32(np.sin(alpha))
-            for base in [1, 5, 9, 13, 16]:
-                px, py = xi[base], xi[base + 1]
-                xi[base]    = px*c - py*s
-                xi[base+1]  = px*s + py*c
-
-        xi = (xi - self.xm) / self.xs
+        # АУГМЕНТАЦІЮ ПРИБРАНО ЗВІДСИ, ПЕРЕНЕСЕНО НА ВІДЕОКАРТУ
+        xi = (self.X_raw[i] - self.xm) / self.xs
+        yi = self.y_raw[i]
         return torch.from_numpy(xi), torch.from_numpy(yi)
 
 class ResBlock(nn.Module):
@@ -242,6 +236,7 @@ class SolveMLP(nn.Module):
         super().__init__()
         dim = 128
         self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
+        # ЗАЛИШАЄМО 3 БЛОКИ, ЩОБ НЕ ЗЛАМАТИ weights.py ТА LKRnn.cxx
         self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim)) 
         self.head = nn.Linear(dim, out_dim)
         
@@ -250,8 +245,8 @@ class SolveMLP(nn.Module):
         
     def forward(self, x): 
         raw = self.head(self.blocks(self.input_proj(x)))
-        # МІКРО-ПОВІДОК (10% для маси) - Більше не можна розмазати поріг!
-        scale = torch.tensor([0.10, 0.2, 0.2], device=raw.device)
+        # СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (10% для маси) - Рятує від "Атрактора"
+        scale = torch.tensor([0.10, 0.20, 0.20], device=raw.device)
         return torch.tanh(raw) * scale
 
 class EarlyStopping:
@@ -265,6 +260,8 @@ class EarlyStopping:
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[I] Використовуємо пристрій: {device}")
+    
     os.makedirs(args.outdir, exist_ok=True)
     X, y, lkr = load_and_prepare(args.input, args.tree)
 
@@ -273,25 +270,52 @@ def train(args):
     n_tr, n_val = int(0.70*N), int(0.15*N)
     idx_tr, idx_val, idx_te = idx[:n_tr], idx[n_tr:n_tr+n_val], idx[n_tr+n_val:]
 
-    ds_tr = SolveDataset(X[idx_tr], y[idx_tr], augment=True)
+    # Більше не передаємо augment=True, бо ми робимо це на GPU
+    ds_tr = SolveDataset(X[idx_tr], y[idx_tr])
     norm = ds_tr.norm
-    ds_val = SolveDataset(X[idx_val], y[idx_val], norm, augment=False)
+    ds_val = SolveDataset(X[idx_val], y[idx_val], norm)
 
     with open(os.path.join(args.outdir, "norm_stats.json"), "w") as f: json.dump(norm, f, indent=2)
 
-    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
-    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True)
+    # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True не дає процесору "засинати"
+    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
+    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
-    model, stopper = SolveMLP().to(device), EarlyStopping(PATIENCE)
-    # L1 LOSS: Стимулює видавати рівно 0, якщо немає чіткого сигналу. Вбиває регресію до середнього.
+    model = SolveMLP().to(device)
+    
+    # МАГІЯ PYTORCH 2.0 (TORCH.COMPILE)
+    try:
+        print("[I] Спроба компіляції моделі для максимальної швидкості (torch.compile)...")
+        model = torch.compile(model)
+        print("[I] Модель успішно скомпільовано!")
+    except Exception as e:
+        print("[W] Ваша версія або система не підтримує torch.compile. Тренування продовжиться без нього.")
+
+    stopper = EarlyStopping(PATIENCE)
     criterion = nn.L1Loss() 
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs, eta_min=LR*1e-2)
 
+    print("\n[I] Починаємо тренування. Спостерігайте за GPU!")
+    start_time = time.time()
+    
     for ep in range(1, args.epochs + 1):
         model.train(); tr_loss = 0.0
         for xb, yb in loader_tr:
             xb, yb = xb.to(device), yb.to(device)
+            
+            # --- ВЕКТОРИЗОВАНА АУГМЕНТАЦІЯ НА GPU (Блискавично швидко) ---
+            alpha = torch.empty(xb.shape[0], device=device).uniform_(0, 2*np.pi)
+            c, s  = torch.cos(alpha), torch.sin(alpha)
+            
+            # Індекси Px та Py: lepM(1,2), lepP(5,6), jb1(9,10), jb2(13,14), MET(16,17)
+            for base in [1, 5, 9, 13, 16]:
+                px = xb[:, base].clone()
+                py = xb[:, base + 1].clone()
+                xb[:, base]     = px * c - py * s
+                xb[:, base + 1] = px * s + py * c
+            # -------------------------------------------------------------
+            
             optim.zero_grad()
             loss = criterion(model(xb), yb)
             loss.backward()
@@ -301,15 +325,27 @@ def train(args):
 
         model.eval(); val_loss = 0.0
         with torch.no_grad():
-            for xb, yb in loader_val: val_loss += criterion(model(xb.to(device)), yb.to(device)).item() * len(xb)
+            for xb, yb in loader_val: 
+                val_loss += criterion(model(xb.to(device)), yb.to(device)).item() * len(xb)
 
         tr_loss, val_loss = tr_loss / len(ds_tr), val_loss / len(ds_val)
         scheduler.step()
-        print(f"{ep:6d}  {tr_loss:10.6f}  {val_loss:10.6f}")
-        if stopper(val_loss, model): break
+        
+        if ep % 10 == 0 or ep == 1:
+            elapsed = time.time() - start_time
+            print(f"Епоха {ep:4d} | Tr Loss: {tr_loss:8.6f} | Val Loss: {val_loss:8.6f} | Час: {elapsed:.1f}c")
+            
+        if stopper(val_loss, model): 
+            print(f"-> Зупинка на епосі {ep} (Patience: {PATIENCE})")
+            break
 
-    model.load_state_dict(stopper.best_state)
-    torch.save(model.state_dict(), os.path.join(args.outdir, "solve_nn_best.pt"))
+    # Якщо torch.compile був увімкнений, треба дістати "чисті" ваги з _orig_mod
+    clean_state_dict = stopper.best_state
+    if any(k.startswith('_orig_mod.') for k in clean_state_dict.keys()):
+        clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in clean_state_dict.items()}
+
+    model.load_state_dict(clean_state_dict, strict=False)
+    torch.save(clean_state_dict, os.path.join(args.outdir, "solve_nn_best.pt"))
     print("\n[I] Тренування успішно завершено!")
 
 if __name__ == "__main__":
