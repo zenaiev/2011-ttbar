@@ -157,10 +157,8 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
     // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!
-    float t_mtt = std::tanh(out[0]);
-    
-    // Симетричні 15% для маси
-    float d_log_mtt  = t_mtt * 0.15f;
+    // ── 6. ВІДНОВЛЕННЯ З ФІЛІГРАННИМ ОБМЕЖЕННЯМ ────────────────────
+    float d_log_mtt  = std::tanh(out[0]) * 0.05f; // <--- ТУТ ТІЛЬКИ 0.05f
     float d_log_pttt = std::tanh(out[1]) * 0.20f;
     float d_ytt      = std::tanh(out[2]) * 0.05f;
 
