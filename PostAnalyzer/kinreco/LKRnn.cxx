@@ -157,16 +157,18 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
 
     // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
     // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!
-    float d_log_mtt  = std::tanh(out[0]) * 0.10f;
+    float t_mtt = std::tanh(out[0]);
+    
+    // Симетричні 15% для маси
+    float d_log_mtt  = t_mtt * 0.15f;
     float d_log_pttt = std::tanh(out[1]) * 0.20f;
-    float d_ytt      = std::tanh(out[2]) * 0.20f;
+    float d_ytt      = std::tanh(out[2]) * 0.05f;
 
     const float mtt   = std::exp(log_mtt_lkrv3 + d_log_mtt);
     const float pttt  = std::exp(log_pttt_lkrv3 + d_log_pttt) - 1.0f;
     const float ytt   = ytt_lkr + d_ytt;
     const float phitt = phitt_lkr;
 
-    // Надійний захист від NaN та нефізичних значень
     if (std::isnan(mtt) || mtt <= 0.f || std::isnan(pttt) || pttt < 0.f) return solution;
     if (mtt <= 0.f || pttt < 0.f) return solution;
 

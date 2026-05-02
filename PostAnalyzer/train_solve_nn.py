@@ -245,9 +245,14 @@ class SolveMLP(nn.Module):
         
     def forward(self, x): 
         raw = self.head(self.blocks(self.input_proj(x)))
-        # СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (10% для маси)
-        scale = torch.tensor([0.10, 0.20, 0.20], device=raw.device)
-        return torch.tanh(raw) * scale
+        t = torch.tanh(raw)
+        
+        # Симетричні 15% для маси (щоб вистачило сили опустити події до 345 ГеВ)
+        out_0 = t[:, 0] * 0.15
+        out_1 = t[:, 1] * 0.20
+        out_2 = t[:, 2] * 0.05  # Рапідність залишаємо 5%, бо вона ідеальна!
+        
+        return torch.stack([out_0, out_1, out_2], dim=1)
 
 # --- КАСТОМНА ФУНКЦІЯ ВТРАТ З ВАГАМИ ---
 class WeightedL1Loss(nn.Module):
