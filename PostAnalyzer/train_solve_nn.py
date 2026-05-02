@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
-# --- ЗОЛОТИЙ СТАНДАРТ (найкращий результат) ---
+# --- ЗОЛОТИЙ СТАНДАРТ (Швидкість GPU + Weighted L1 Loss) ---
 IN_DIM       = 26     # Абсолютна сліпота
 OUT_DIM      = 3      
 BATCH_SIZE   = 4096   
@@ -245,9 +245,20 @@ class SolveMLP(nn.Module):
         
     def forward(self, x): 
         raw = self.head(self.blocks(self.input_proj(x)))
-        # СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (10% для маси) - Рятує від "Атрактора"
+        # СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (10% для маси)
         scale = torch.tensor([0.10, 0.20, 0.20], device=raw.device)
         return torch.tanh(raw) * scale
+
+# --- КАСТОМНА ФУНКЦІЯ ВТРАТ З ВАГАМИ ---
+class WeightedL1Loss(nn.Module):
+    def __init__(self, weights):
+        super().__init__()
+        self.register_buffer("weights", weights / weights.sum())
+
+    def forward(self, pred, target):
+        loss = torch.abs(pred - target) # L1 Loss (модуль)
+        return (loss.mean(dim=0) * self.weights).sum()
+# ---------------------------------------
 
 class EarlyStopping:
     def __init__(self, patience=PATIENCE):
@@ -277,7 +288,7 @@ def train(args):
 
     with open(os.path.join(args.outdir, "norm_stats.json"), "w") as f: json.dump(norm, f, indent=2)
 
-    # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True не дає процесору "засинати"
+    # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True
     loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
@@ -292,7 +303,13 @@ def train(args):
         print("[W] Ваша версія або система не підтримує torch.compile. Тренування продовжиться без нього.")
 
     stopper = EarlyStopping(PATIENCE)
-    criterion = nn.L1Loss() 
+    
+    # --- ВИКОРИСТАННЯ WEIGHTED L1 LOSS ---
+    # Вага 5.0 для маси, 1.0 для pT і y (маса в 5 разів важливіша)
+    LOSS_WEIGHTS = torch.tensor([5.0, 1.0, 1.0], device=device)
+    criterion = WeightedL1Loss(LOSS_WEIGHTS)
+    # -------------------------------------
+    
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs, eta_min=LR*1e-2)
 
