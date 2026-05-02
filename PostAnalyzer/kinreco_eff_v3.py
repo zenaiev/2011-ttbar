@@ -5,13 +5,13 @@ import sys
 
 # Відкриття дерева
 # Якщо передали ім'я файла як параметр, використовувати його, або файл за замовчуванням
-filename = "ttbar_output_3_lkrv2_main_fixed.root" if len(sys.argv) < 2 else sys.argv[1]
+filename = "ttbar_output_3.root" if len(sys.argv) < 2 else sys.argv[1]
 tree = uproot.open(filename)["ttbarTree"]
 
 # Визначення масивів для зчитування
 #kinrecos = ['lkrv2']
-kinrecos = ['lkr','lkrv2','lkrv2_rejected']
-variables = ['mtt', 'pttt', 'ytt', 'phitt',]
+kinrecos = ['lkr','lkrv3','lkrnn']
+variables = ['mtt', 'pttt', 'ytt', 'phitt','dphitt']
 arrays = tree.arrays(
     [f"{v}_{k}" for v in variables for k in kinrecos] + [f"{v}_gen" for v in variables],
     library="np"
@@ -171,39 +171,34 @@ fig_res.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\
 fig_res.savefig('plots/resolution.pdf')
 fig_res.savefig('plots/resolution.png')
 
+# --- Побудова графіків відношення ---
 fig_ratio, axs_ratio = plt.subplots(3, 3, figsize=(12, 12))
 fig_ratio.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
 
-#відношення роздільних здатностей
 for variable in variables:
+    if variable not in positions: continue
     i, j = positions[variable]
 
-    # Бін-центри однакові для всіх реконструкцій
+    # Базовий метод для порівняння - LKR
+    res_lkr = np.array(results['lkr'][variable][5])
     bin_centers = results['lkr'][variable][0]
 
-    # Резолюшни
-    res_lkr       = np.array(results['lkr'][variable][5])
-    res_lkrv2     = np.array(results['lkrv2'][variable][5])
-    res_rejected  = np.array(results['lkrv2_rejected'][variable][5])
+    # Малюємо відношення для кожного методу до LKR
+    for k in kinrecos:
+        res_current = np.array(results[k][variable][5])
+        # divide із обробкою ділення на 0 (RuntimeWarning зникне)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratio = res_current / res_lkr
+            
+        color = 'red' if k == 'lkrnn' else None
+        axs_ratio[i, j].plot(bin_centers, ratio, 'o-', label=f"{k.upper()}/LKR", markersize=4, color=color)
 
-    # Відношення
-    ratio_lkr_over_lkr      = res_lkr / res_lkr                # =1
-    ratio_lkrv2_over_lkr    = res_lkrv2 / res_lkr
-    ratio_rejected_over_lkr = res_rejected / res_lkr
-
-    axs_ratio[i, j].plot(bin_centers, ratio_lkr_over_lkr, 'o',linestyle='-', label="LKR / LKR", markersize=5)
-    axs_ratio[i, j].plot(bin_centers, ratio_lkrv2_over_lkr, 'o',linestyle='-', label="LKRv2 / LKR", markersize=5)
-    axs_ratio[i, j].plot(bin_centers, ratio_rejected_over_lkr, 'o',linestyle='-', label="LKRv2(rejected) / LKR", markersize=5)
-
-    axs_ratio[i, j].axhline(1.0, color='gray', linestyle='--', linewidth=1)
-
+    axs_ratio[i, j].axhline(1.0, color='black', linestyle='--', alpha=0.5)
     axs_ratio[i, j].set_xlabel(labels[variable])
     axs_ratio[i, j].set_ylabel("Resolution ratio")
-
-    axs_ratio[i, j].set_ylim(0.9, 1.6)
+    axs_ratio[i, j].set_ylim(0.5, 1.5)
     axs_ratio[i, j].grid(True)
-    axs_ratio[i, j].legend()
+    axs_ratio[i, j].legend(fontsize='small', ncol=2)
 
-fig_ratio.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV\nRatio of resolution: new/old reconstruction')
-fig_ratio.savefig('plots/resolution_ratio.pdf')
+fig_ratio.suptitle('Resolution Ratio relative to LKR')
 fig_ratio.savefig('plots/resolution_ratio.png')
