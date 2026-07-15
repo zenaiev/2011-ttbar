@@ -23,7 +23,7 @@
 #include "kinreco/LKR.h"
 #include "kinreco/LKRv2.h"
 #include "kinreco/LKRv3.h"
-#include "kinreco/LKRnn.h"
+//#include "kinreco/LKRnn.h"
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -221,6 +221,7 @@ class ZEventRecoInput
     std::vector<TString> VecInFile; // container with input files
     double Weight; // weight for histogram filling
     std::string nameConfigFile; // option config file
+    bool StoreAllVars; // apply to signal MC, write out all events with all needed input variables + kine reco output
     
     // contstructor
     ZEventRecoInput()
@@ -228,6 +229,7 @@ class ZEventRecoInput
       // set default values
       Weight = 1.0;
       Gen = false;
+      StoreAllVars = false;
     }
     
     // add one more input file (str) to the chain
@@ -251,6 +253,7 @@ void eventreco(ZEventRecoInput in)
   printf("****** EVENTRECO ******\n");
   printf("input sample: %s\n", in.Name.Data());
   printf("type: %d   channel: %d\n", in.Type, in.Channel);
+  printf("StoreAllVars: %d\n", in.StoreAllVars);
   
   // steering
   // b-tagging discriminator for Combined Secondary Vertex Loose 
@@ -262,6 +265,10 @@ void eventreco(ZEventRecoInput in)
   // this flag determines whether generator level information is available
   // (should be available for signal MC)
   bool flagMC = (in.Type == 2 || in.Type == 3);
+  if(in.StoreAllVars && (in.Type != 2)) {
+    printf("ERROR: inconsistent StoreAllVars = %d and Type = %d\n", in.StoreAllVars, in.Type);
+    exit(1);
+  }
   
   // output file
   TFile* fout = TFile::Open(TString::Format("%s/%s-c%d.root", outDir.Data(), in.Name.Data(), in.Channel), "recreate");
@@ -299,7 +306,7 @@ void eventreco(ZEventRecoInput in)
   if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
   if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) kinrecos.push_back(new LKRv2());
   if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) kinrecos.push_back(new LKRv3());
-  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn());
+  //if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn());
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
@@ -320,13 +327,17 @@ void eventreco(ZEventRecoInput in)
   // TTree to store kinematic reconstruction output
   TTree *tree_kr = nullptr;
   if(in.Name == "mcSigReco") {
-    outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
+    std::string suffix = in.StoreAllVars ? "_full" : "";
+    outputFile = new TFile(TString::Format("ttbar_output%s_%d.root", suffix.c_str(), in.Channel), "RECREATE");
     tree_kr = new TTree("ttbarTree", "Tree storing ttbar event variables");
     for (auto& kr : kinrecos) {
       kr->init(tree_kr, krvars);
     }
   }
   float mtt_gen, ytt_gen, pttt_gen, phitt_gen, dphitt_gen;
+  int reco_passed_selection, reco_passed_selectbestjets;
+  float recoLm[4], recoLp[4], recoJ1[4], recoJ2[4];
+  float recoMetPx, recoMetPy;
   if (tree_kr) {
     //gen branches
     tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
@@ -334,10 +345,23 @@ void eventreco(ZEventRecoInput in)
     tree_kr->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
     tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
     tree_kr->Branch("dphitt_gen", &dphitt_gen, "dphitt_gen/F");
+    if (in.StoreAllVars) {
+      tree_kr->Branch("reco_passed_selection", &reco_passed_selection, "reco_passed_selection/I");
+      tree_kr->Branch("reco_passed_selectbestjets", &reco_passed_selectbestjets, "reco_passed_selectbestjets/I");
+      tree_kr->Branch("recoLp", &recoLp, "recoLp[4]/F");
+      tree_kr->Branch("recoLm", &recoLm, "recoLm[4]/F");
+      tree_kr->Branch("recoJ1", &recoJ1, "recoJ1[4]/F");
+      tree_kr->Branch("recoJ2", &recoJ2, "recoJ2[4]/F");
+      tree_kr->Branch("recoMetPx", &recoMetPx, "recoMetPx/F");
+      tree_kr->Branch("recoMetPy", &recoMetPy, "recoMetPy/F");
+    }
   }
   // event loop
   for(int e = 0; e < nEvents; e++)
   {
+    if(e%100000 == 0) {
+      printf("done %d events [%.0f%%]\n", e, 100.*e/nEvents);
+    }
     chain->GetEntry(e);
     if(flagMC)
     {
@@ -362,107 +386,157 @@ void eventreco(ZEventRecoInput in)
     if(in.Type > 1)
       nGen++;
     
-    // process reco level if needed
-    //
-    // primary vertex selection
-    if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
-      continue;
-    // primary dataset name
-    //TString inFile = chain->GetCurrentFile()->GetName();
-    // select dilepton pair
-    TLorentzVector vecLepM, vecLepP;
-    double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
-    bool trig = false;
-    // *****************************************
-    // ***************** emu *******************
-    // *****************************************
-    if(in.Channel == 3)
-    {
-      // trigger: 12th to 17th bits
-      // (accept the event if at least one needed trigger bit is fired) 
-      for(int bit = 12; bit < 17; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      // call dileption selection routine (see selection.h for description)
-      if(trig)
-        SelectDilepEMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // *****************************************
-    // ***************** ee ********************
-    // *****************************************
-    if(in.Channel == 1)
-    {
-      // trigger: 6th to 11th bits
-      for(int bit = 6; bit < 11; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
-      // additinal requirement on the missing transverse energy
-      if(trig && met > 30.0)
-        SelectDilepEE(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // *****************************************
-    // **************** mumu *******************
-    // *****************************************
-    if(in.Channel == 2)
-    {
-      // trigger: 0th to 5th bits
-      for(int bit = 0; bit < 5; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
-      // additinal requirement on the missing transverse energy
-      if(trig && met > 30.0)
-        SelectDilepMuMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // check if there is a dilepton pair found, otherwise skip the event
-    if(maxPtDiLep < 0.0)
-      continue;
-    // dilepton pair found, now select jets; 
-    // all jets are stored for kinematic reconstruction
-    std::vector<TLorentzVector> vecJets;
-    bool oneBTagJet = false;
-    for(int j = 0; j < preselTree->Njet; j++)
-    {
-      if(TMath::Abs(preselTree->jetEta[j]) > 2.4)
-        continue;
-      TLorentzVector vecJet;
-      vecJet.SetPtEtaPhiM(preselTree->jetPt[j], preselTree->jetEta[j], preselTree->jetPhi[j], preselTree->jetMass[j]);
-      // subtract muon and electron energy fractions
-      double corrE = vecJet.E() - preselTree->jetMuEn[j] - preselTree->jetElEn[j];
-      double corrPt = preselTree->jetPt[j] * corrE / vecJet.E();\
-      // require pT(jet) > 30 GeV
-      if(corrPt < 30.0)
-        continue;
-      TLorentzVector corrVec;
-      corrVec.SetPtEtaPhiE(corrPt, preselTree->jetEta[j], preselTree->jetPhi[j], corrE);
-      // b-tagging: check if there at least one b-tagged jet
-      // for b-tagged jet make the jet mass negative: this is for proper 
-      // identification of b-tagged jets in the kinematic reconstruction
-      if(preselTree->jetBTagDiscr[j] > bTagDiscrL)
+    auto process_reco_level = [bTagDiscrL, &in, preselTree](TLorentzVector& vecLepM, TLorentzVector& vecLepP, std::vector<TLorentzVector>& vecJets) {
+      // primary vertex selection
+      if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
+        return false;
+      // primary dataset name
+      //TString inFile = chain->GetCurrentFile()->GetName();
+      // select dilepton pair
+      double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
+      bool trig = false;
+      // *****************************************
+      // ***************** emu *******************
+      // *****************************************
+      if(in.Channel == 3)
       {
-        corrVec.SetPtEtaPhiM(corrVec.Pt(), corrVec.Eta(), corrVec.Phi(), -1 * corrVec.M());
-        oneBTagJet = true;
+        // trigger: 12th to 17th bits
+        // (accept the event if at least one needed trigger bit is fired) 
+        for(int bit = 12; bit < 17; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        // call dileption selection routine (see selection.h for description)
+        if(trig)
+          SelectDilepEMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
       }
-      vecJets.push_back(corrVec);
+      // *****************************************
+      // ***************** ee ********************
+      // *****************************************
+      if(in.Channel == 1)
+      {
+        // trigger: 6th to 11th bits
+        for(int bit = 6; bit < 11; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
+        // additinal requirement on the missing transverse energy
+        if(trig && met > 30.0)
+          SelectDilepEE(preselTree, vecLepM, vecLepP, maxPtDiLep);
+      }
+      // *****************************************
+      // **************** mumu *******************
+      // *****************************************
+      if(in.Channel == 2)
+      {
+        // trigger: 0th to 5th bits
+        for(int bit = 0; bit < 5; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
+        // additinal requirement on the missing transverse energy
+        if(trig && met > 30.0)
+          SelectDilepMuMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
+      }
+      // check if there is a dilepton pair found, otherwise skip the event
+      if(maxPtDiLep < 0.0)
+        return false;
+      // dilepton pair found, now select jets; 
+      // all jets are stored for kinematic reconstruction
+      bool oneBTagJet = false;
+      for(int j = 0; j < preselTree->Njet; j++)
+      {
+        if(TMath::Abs(preselTree->jetEta[j]) > 2.4)
+          continue;
+        TLorentzVector vecJet;
+        vecJet.SetPtEtaPhiM(preselTree->jetPt[j], preselTree->jetEta[j], preselTree->jetPhi[j], preselTree->jetMass[j]);
+        // subtract muon and electron energy fractions
+        double corrE = vecJet.E() - preselTree->jetMuEn[j] - preselTree->jetElEn[j];
+        double corrPt = preselTree->jetPt[j] * corrE / vecJet.E();\
+        // require pT(jet) > 30 GeV
+        if(corrPt < 30.0)
+          continue;
+        TLorentzVector corrVec;
+        corrVec.SetPtEtaPhiE(corrPt, preselTree->jetEta[j], preselTree->jetPhi[j], corrE);
+        // b-tagging: check if there at least one b-tagged jet
+        // for b-tagged jet make the jet mass negative: this is for proper 
+        // identification of b-tagged jets in the kinematic reconstruction
+        if(preselTree->jetBTagDiscr[j] > bTagDiscrL)
+        {
+          corrVec.SetPtEtaPhiM(corrVec.Pt(), corrVec.Eta(), corrVec.Phi(), -1 * corrVec.M());
+          oneBTagJet = true;
+        }
+        vecJets.push_back(corrVec);
+      }
+      // if there are no two jets, skip the event
+      if(vecJets.size() < 2)
+        return false;
+      // require at least one b-tagged jet
+      if(!oneBTagJet)
+        return false;
+      return true;
+    };
+    
+    // process reco level if needed
+    TLorentzVector vecLepM, vecLepP;
+    std::vector<TLorentzVector> vecJets;
+    reco_passed_selection = process_reco_level(vecLepM, vecLepP, vecJets);
+    //
+    if (reco_passed_selection == 0) {
+      if(in.StoreAllVars == 0) 
+        continue;
+      else {
+        for (auto& kr : kinrecos) {
+          kr->reset_vars();
+          for(int i = 0; i < 4; i++) {
+            recoLm[i] = recoLp[i] = recoJ1[i] = recoJ2[i] = -999.;
+          }
+          recoMetPx = recoMetPy = -999.;
+        }
+      }
     }
-    // if there are no two jets, skip the event
-    if(vecJets.size() < 2)
-      continue;
-    // require at least one b-tagged jet
-    if(!oneBTagJet)
-      continue;
+    else {
+      if(in.StoreAllVars == 1) {
+        recoLm[0] = vecLepM.Px();
+        recoLm[1] = vecLepM.Py();
+        recoLm[2] = vecLepM.Pz();
+        recoLm[3] = vecLepM.M();
+        recoLp[0] = vecLepP.Px();
+        recoLp[1] = vecLepP.Py();
+        recoLp[2] = vecLepP.Pz();
+        recoLp[3] = vecLepP.M();
+        TLorentzVector jetBest1, jetBest2;
+        reco_passed_selectbestjets = LKR::selectBestJets(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
+        if(reco_passed_selectbestjets) {
+          recoJ1[0] = jetBest1.Px();
+          recoJ1[1] = jetBest1.Py();
+          recoJ1[2] = jetBest1.Pz();
+          recoJ1[3] = jetBest1.M();
+          recoJ2[0] = jetBest2.Px();
+          recoJ2[1] = jetBest2.Py();
+          recoJ2[2] = jetBest2.Pz();
+          recoJ2[3] = jetBest2.M();
+        }
+        else {
+          for(int i = 0; i < 4; i++) {
+            recoJ1[i] = recoJ2[i] = -999.;
+          }
+        }
+        recoMetPx = preselTree->metPx;
+        recoMetPy = preselTree->metPy;
+      }
+    }
     // event selection done: increment the counter of selected events
-    nSel++;
+    if(reco_passed_selection)
+      nSel++;
     
     // fill generator level top, tbar and ttbar variables
     if(tree_kr) {
@@ -481,34 +555,36 @@ void eventreco(ZEventRecoInput in)
     // run kinematic reconstruction to restore the top and antitop momenta
     bool flagPassedKinRec = false; // status used to go further to fill histograms
     TLorentzVector t, tbar; // vectors used to fill histograms
-    for (auto& kr : kinrecos) {
-      kr->reset_vars();
-      std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
-      if(solution.size()) {
-        kr->calculate_vars(solution[0], solution[1], solution[2]);
-      }
-      // TEMPORARY use SKR solution to fill histograms
-      if (kr->GetName() == "skr") {
+    if (reco_passed_selection) {
+      for (auto& kr : kinrecos) {
+        kr->reset_vars();
+        std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
         if(solution.size()) {
-          flagPassedKinRec = true;
-          t = solution[0];
-          tbar = solution[1];
+          kr->calculate_vars(solution[0], solution[1], solution[2]);
+        }
+        // TEMPORARY use SKR solution to fill histograms
+        if (kr->GetName() == "skr") {
+          if(solution.size()) {
+            flagPassedKinRec = true;
+            t = solution[0];
+            tbar = solution[1];
+          }
         }
       }
+      if(flagPassedKinRec>0)// successfull skr
+      {
+        // print the top and antitop momenta, if needed
+        //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
+        //printf("antitop:  (%8.3f  %8.3f  %8.3f  %8.3f)\n", tbar.X(), tbar.Y(), tbar.Z(), tbar.M());
+        nReco++;
+        
+        // fill histograms
+        double w = in.Weight;
+        //std::cout<<phitt_skr<<std::endl;
+        //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
+        FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
+      } // end kinreco
     }
-    if(flagPassedKinRec>0)// successfull skr
-    {
-      // print the top and antitop momenta, if needed
-      //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
-      //printf("antitop:  (%8.3f  %8.3f  %8.3f  %8.3f)\n", tbar.X(), tbar.Y(), tbar.Z(), tbar.M());
-      nReco++;
-      
-      // fill histograms
-      double w = in.Weight;
-      //std::cout<<phitt_skr<<std::endl;
-      //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
-      FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
-    } // end kinreco
     if (tree_kr) {
       tree_kr->Fill();
     }

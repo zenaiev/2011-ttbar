@@ -12,6 +12,7 @@ class KinRecoBase {
     void init(TTree* tree, const std::vector<KRVAR*>& krvars) {
       _krvars = krvars;
       _tree_vars.resize(_krvars.size());
+      tree->Branch(_name.c_str(), &_passed, (_name + "/I").c_str());
       for(size_t i = 0; i < _krvars.size(); i++) {
         auto name = _krvars[i]->GetName() + "_" + _name;
         tree->Branch(name.c_str(), &_tree_vars[i], (name + "/F").c_str());
@@ -19,6 +20,7 @@ class KinRecoBase {
     }
 
     void reset_vars() {
+      _passed = 0;
       for(size_t i = 0; i < _krvars.size(); i++) {
         _tree_vars[i] = -1000.0;
       }
@@ -28,6 +30,7 @@ class KinRecoBase {
       for(size_t i = 0; i < _krvars.size(); i++) {
         _tree_vars[i] = _krvars[i]->calculate(t, tbar, ttbar);
       }
+      _passed = 1;
     }
 
     virtual std::vector<TLorentzVector> reconstruct(
@@ -41,5 +44,6 @@ class KinRecoBase {
     const std::string _name;
     std::vector<KRVAR*> _krvars;
     std::vector<float> _tree_vars;
+    int _passed;
     std::vector<TLorentzVector> _solution; // will be updated at each event
 };
