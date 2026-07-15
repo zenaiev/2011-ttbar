@@ -7,6 +7,7 @@
 
 class KinRecoBase {
   public:
+    void SetName(const std::string& name) {_name = name;}
     std::string GetName() {return _name;}
 
     void init(TTree* tree, const std::vector<KRVAR*>& krvars) {
@@ -41,7 +42,7 @@ class KinRecoBase {
 
   protected:
     KinRecoBase(const std::string& name) : _name(name) {} // Protected constructor to initialize _name
-    const std::string _name;
+    std::string _name;
     std::vector<KRVAR*> _krvars;
     std::vector<float> _tree_vars;
     int _passed;

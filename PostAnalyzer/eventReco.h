@@ -277,7 +277,7 @@ void eventreco(ZEventRecoInput in)
   TChain* chain = new TChain("tree");
   for(int f = 0; f < in.VecInFile.size(); f++)
     chain->Add(in.VecInFile[f]);
-  ZTree* preselTree = new ZTree(flagMC);
+  ZTree* preselTree = new ZTree(flagMC, in.StoreAllVars);
   preselTree->Init(chain);
 
   // process generator level, if needed
@@ -301,11 +301,34 @@ void eventreco(ZEventRecoInput in)
 
   // vector of kinematic reconstruction methods
   std::vector<KinRecoBase*> kinrecos;
-  if (read_int(in.nameConfigFile, "kr_FKR", 1)) kinrecos.push_back(new FKR());
-  if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
-  if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
-  if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) kinrecos.push_back(new LKRv2());
-  if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) kinrecos.push_back(new LKRv3());
+  // vector of kinematic reconstruction methods on generator level
+  // (using different names in order to store their output in separate branches)
+  std::vector<KinRecoBase*> kinrecos_gen;
+  auto add_kr_to_vec = [&kinrecos_gen](KinRecoBase* kr, const std::string& name, std::vector<KinRecoBase*>& vec) {
+    kr->SetName(name);
+    vec.push_back(kr);
+  };
+  if (read_int(in.nameConfigFile, "kr_FKR", 1)) {
+    kinrecos.push_back(new FKR());
+    add_kr_to_vec(new FKR(), "fkr_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_SKR", 1)) {
+    kinrecos.push_back(new SKR());
+    add_kr_to_vec(new SKR(), "skr_gen", kinrecos_gen);
+  }
+  LKR* kinreco_lkr = new LKR(); // store this pointer in order to call SelectbestJets()
+  if (read_int(in.nameConfigFile, "kr_LKR", 1)) {
+    kinrecos.push_back(kinreco_lkr);
+    add_kr_to_vec(new LKR(), "lkr_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) {
+    kinrecos.push_back(new LKRv2());
+    add_kr_to_vec(new LKRv2(), "lkrv2_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) {
+    kinrecos.push_back(new LKRv3());
+    add_kr_to_vec(new LKRv3(), "lkrv3_gen", kinrecos_gen);
+  }
   //if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn());
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
@@ -333,9 +356,14 @@ void eventreco(ZEventRecoInput in)
     for (auto& kr : kinrecos) {
       kr->init(tree_kr, krvars);
     }
+    for (auto& kr : kinrecos_gen) {
+      kr->init(tree_kr, krvars);
+    }
   }
   float mtt_gen, ytt_gen, pttt_gen, phitt_gen, dphitt_gen;
   int reco_passed_selection, reco_passed_selectbestjets;
+  float mcLm[4], mcLp[4], mcJ1[4], mcJ2[4];
+  float mcMetPx, mcMetPy;
   float recoLm[4], recoLp[4], recoJ1[4], recoJ2[4];
   float recoMetPx, recoMetPy;
   if (tree_kr) {
@@ -348,6 +376,12 @@ void eventreco(ZEventRecoInput in)
     if (in.StoreAllVars) {
       tree_kr->Branch("reco_passed_selection", &reco_passed_selection, "reco_passed_selection/I");
       tree_kr->Branch("reco_passed_selectbestjets", &reco_passed_selectbestjets, "reco_passed_selectbestjets/I");
+      tree_kr->Branch("mcLp", &mcLp, "mcLp[4]/F");
+      tree_kr->Branch("mcLm", &mcLm, "mcLm[4]/F");
+      tree_kr->Branch("mcJ1", &mcJ1, "mcJ1[4]/F");
+      tree_kr->Branch("mcJ2", &mcJ2, "mcJ2[4]/F");
+      tree_kr->Branch("mcMetPx", &mcMetPx, "mcMetPx/F");
+      tree_kr->Branch("mcMetPy", &mcMetPy, "mcMetPy/F");
       tree_kr->Branch("recoLp", &recoLp, "recoLp[4]/F");
       tree_kr->Branch("recoLm", &recoLm, "recoLm[4]/F");
       tree_kr->Branch("recoJ1", &recoJ1, "recoJ1[4]/F");
@@ -489,6 +523,7 @@ void eventreco(ZEventRecoInput in)
     TLorentzVector vecLepM, vecLepP;
     std::vector<TLorentzVector> vecJets;
     reco_passed_selection = process_reco_level(vecLepM, vecLepP, vecJets);
+    reco_passed_selectbestjets = 0;
     //
     if (reco_passed_selection == 0) {
       if(in.StoreAllVars == 0) 
@@ -514,7 +549,7 @@ void eventreco(ZEventRecoInput in)
         recoLp[2] = vecLepP.Pz();
         recoLp[3] = vecLepP.M();
         TLorentzVector jetBest1, jetBest2;
-        reco_passed_selectbestjets = LKR::selectBestJets(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
+        reco_passed_selectbestjets = kinreco_lkr->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
         if(reco_passed_selectbestjets) {
           recoJ1[0] = jetBest1.Px();
           recoJ1[1] = jetBest1.Py();
@@ -550,6 +585,40 @@ void eventreco(ZEventRecoInput in)
       double dphi_gen = fabs(t_gen.Phi() - tbar_gen.Phi());
       if (dphi_gen > M_PI) dphi_gen = 2 * M_PI - dphi_gen;
       dphitt_gen = dphi_gen;
+      // fill other MC generator-level varaibles if needed
+      if(in.StoreAllVars) {
+        for(int i = 0; i < 4; i++) {
+          mcLp[i] = preselTree->mcLp[i];
+          mcLm[i] = preselTree->mcLm[i];
+          mcJ1[i] = preselTree->mcB[i];
+          mcJ2[i] = preselTree->mcBbar[i];
+        }
+        mcMetPx = preselTree->mcNu[0] + preselTree->mcNubar[0];
+        mcMetPy = preselTree->mcNu[1] + preselTree->mcNubar[1];
+        // run kinematic reconstruction on generator level
+        auto make_vector = [](const float* p1, const float* p2 = nullptr) {
+          std::vector<TLorentzVector> vec((p2 == nullptr) ? 1 : 2);
+          TLorentzVector part;
+          part.SetXYZM(p1[0], p1[1], p1[2], p1[3]);
+          vec[0] = part;
+          if(p2) {
+            part.SetXYZM(p2[0], p2[1], p2[2], p2[3]);
+            vec[1] = part;
+          }
+          return vec;
+        };
+        std::vector<TLorentzVector> vecLepM_gen = make_vector(mcLm);
+        std::vector<TLorentzVector> vecLepP_gen = make_vector(mcLp);
+        std::vector<TLorentzVector> vecJets_gen = make_vector(mcJ1, mcJ2);
+        std::vector<float> fake_btag = {1., 1.};
+        for (auto& kr : kinrecos_gen) {
+          kr->reset_vars();
+          std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM_gen[0], vecLepP_gen[0], vecJets_gen, &fake_btag[0], bTagDiscrL, mcMetPx, mcMetPy);
+          if(solution.size()) {
+            kr->calculate_vars(solution[0], solution[1], solution[2]);
+          }
+        }
+      }
     }
 
     // run kinematic reconstruction to restore the top and antitop momenta
@@ -611,6 +680,9 @@ void eventreco(ZEventRecoInput in)
     outputFile->Close();
   }
   for (auto& kr : kinrecos) {
+    delete kr;
+  }
+  for (auto& kr : kinrecos_gen) {
     delete kr;
   }
   for (auto& krvar : krvars) {

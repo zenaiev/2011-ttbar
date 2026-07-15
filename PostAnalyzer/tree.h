@@ -22,6 +22,9 @@ public :
    // MC flag (true for MC, false for data)
    bool _flagMC;
 
+   // write out all events with all needed input variables + kine reco output
+   int _storeAllVars;
+
    // variable array max sizes
    static const int maxNel = 10; // electrons
    static const int maxNmu = 10; // muons
@@ -77,6 +80,12 @@ public :
    Int_t           mcEventType; // type of event: 1 ttbar decay into ee, 2 ttbar decay into mumu, 3 ttbar decay into emu, 0 anything else
    float mcT[4];    // top quark four momentum
    float mcTbar[4]; // antitop quark four momentum
+   float mcLp[4];    // l+ four momentum
+   float mcLm[4];    // l- four momentum
+   float mcB[4];    // b four momentum
+   float mcBbar[4];    // anti-b four momentum
+   float mcNu[4]; // nu four momentum
+   float mcNubar[4]; // anti-nu four momentum
 
    // List of branches (their names follow variable names with prefix b_)
    TBranch        *b_evRunNumber;   //!
@@ -123,10 +132,16 @@ public :
    TBranch        *b_mcEventType; //!
    TBranch        *b_mcT; //!
    TBranch        *b_mcTbar; //!
+   TBranch        *b_mcLp; //!
+   TBranch        *b_mcLm; //!
+   TBranch        *b_mcB; //!
+   TBranch        *b_mcBbar; //!
+   TBranch        *b_mcNu; //!
+   TBranch        *b_mcNubar; //!
 
    // constructor
    // argument: true for MC, false (default) for data
-   ZTree(bool flagMC = false) : fChain(0), _flagMC(flagMC) { }
+   ZTree(bool flagMC = false, bool storeAllVars = false) : fChain(0), _flagMC(flagMC), _storeAllVars(storeAllVars) { }
    
    // destructor
    virtual ~ZTree() { }
@@ -187,6 +202,14 @@ void ZTree::Init(TTree *tree)
    if(_flagMC) fChain->SetBranchAddress("mcEventType", &mcEventType, &b_mcEventType);
    if(_flagMC) fChain->SetBranchAddress("mcT", mcT, &b_mcT);
    if(_flagMC) fChain->SetBranchAddress("mcTbar", mcTbar, &b_mcTbar);
+   if(_storeAllVars) {
+      fChain->SetBranchAddress("mcLp", mcLp, &b_mcLp);
+      fChain->SetBranchAddress("mcLm", mcLm, &b_mcLm);
+      fChain->SetBranchAddress("mcB", mcB, &b_mcB);
+      fChain->SetBranchAddress("mcBbar", mcBbar, &b_mcBbar);
+      fChain->SetBranchAddress("mcNu", mcNu, &b_mcNu);
+      fChain->SetBranchAddress("mcNubar", mcNubar, &b_mcNubar);
+   }
 }
 
 #endif // #ifdef ZTree_h
