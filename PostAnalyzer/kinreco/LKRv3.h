@@ -11,6 +11,7 @@ class LKRv3: public KinRecoBase {
       const Float_t metPx, const Float_t metPy
     );
   protected:
+    LKRv3(const std::string& name);
     virtual bool selectBestJets(const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
       const std::vector<TLorentzVector>& vecJets, Float_t* jetBTagDiscr, const double bTagDiscrL,
       TLorentzVector& jetBest1, TLorentzVector& jetBest2);

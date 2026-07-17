@@ -2,11 +2,12 @@ import argparse, json, os, time
 import concurrent.futures
 import numpy as np
 import torch
+import torch._dynamo  # для torch.compile fallback (--compile); імпорт на рівні модуля, щоб не тінити torch у train()
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
-# --- ЗОЛОТИЙ СТАНДАРТ (Швидкість GPU + Weighted L1 Loss) ---
+
 IN_DIM       = 26     # Абсолютна сліпота
 OUT_DIM      = 3      
 BATCH_SIZE   = 4096   
@@ -84,50 +85,82 @@ def ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars):
 
     return np.array([d_log_mtt, d_log_pttt, d_ytt], dtype=np.float32)
 
+def gen4_to_dict(v):
+    """Конвертує генераторний 4-вектор [px, py, pz, m] у {pt, eta, phi, e}."""
+    px, py, pz, m = float(v[0]), float(v[1]), float(v[2]), float(v[3])
+    pt = np.sqrt(px*px + py*py)
+    eta = np.arcsinh(pz / pt) if pt > 0 else 0.0
+    phi = np.arctan2(py, px)
+    e = np.sqrt(px*px + py*py + pz*pz + m*m)
+    return {"pt": pt, "eta": eta, "phi": phi, "e": e}
+
 def process_single_batch(args):
-    filename, treename, start, stop = args
+    filename, treename, start, stop, gen = args
     import uproot
     import awkward as ak
     import numpy as np
-    
+
     MASS_MU, MASS_EL = 0.105658, 0.000511
     def calc_e(pt, eta, mass): return np.sqrt(pt**2 + (pt*np.sinh(eta))**2 + mass**2)
 
-    branches = ["Nmu", "Nel", "Njet", "muPt", "muEta", "muPhi", "elPt", "elEta", "elPhi", "jetPt", "jetEta", "jetPhi", "jetMass", "metPx", "metPy", "mcT", "mcTbar"]
+    if gen:
+        branches = ["mcT", "mcTbar", "metPx", "metPy",
+                    "mcLp", "mcLm", "mcB", "mcBbar", "mcNu", "mcNubar", "mcEventType"]
+    else:
+        branches = ["Nmu", "Nel", "Njet", "muPt", "muEta", "muPhi", "elPt", "elEta", "elPhi", "jetPt", "jetEta", "jetPhi", "jetMass", "metPx", "metPy", "mcT", "mcTbar"]
 
     with uproot.open(f"{filename}:{treename}") as tree:
         batch_data = tree.arrays(branches, entry_start=start, entry_stop=stop, library="ak")
 
     N_batch = len(batch_data["metPx"])
-    inputs, targets, lkr_list = [], [], []
+    inputs, targets, lkr_list, orig_idx = [], [], [], []
     skipped = 0
 
-    Nmu, Nel, Njet = np.array(batch_data["Nmu"]).astype(int), np.array(batch_data["Nel"]).astype(int), np.array(batch_data["Njet"]).astype(int)
+    if not gen:
+        Nmu, Nel, Njet = np.array(batch_data["Nmu"]).astype(int), np.array(batch_data["Nel"]).astype(int), np.array(batch_data["Njet"]).astype(int)
+    else:
+        mcEventType = np.array(batch_data["mcEventType"]).astype(int)
     met_px, met_py = np.array(batch_data["metPx"]).astype(np.float32), np.array(batch_data["metPy"]).astype(np.float32)
 
     for i in range(N_batch):
         t_arr_list, tb_arr_list = batch_data["mcT"][i].to_list(), batch_data["mcTbar"][i].to_list()
         if len(t_arr_list) < 4 or len(tb_arr_list) < 4: skipped += 1; continue
-            
+
         t_arr, tb_arr = np.array(t_arr_list, dtype=np.float64), np.array(tb_arr_list, dtype=np.float64)
         t_px, t_py, t_pz, t_m = t_arr[0], t_arr[1], t_arr[2], t_arr[3]
         tb_px, tb_py, tb_pz, tb_m = tb_arr[0], tb_arr[1], tb_arr[2], tb_arr[3]
         t_e  = np.sqrt(t_px**2  + t_py**2  + t_pz**2  + t_m**2)
         tb_e = np.sqrt(tb_px**2 + tb_py**2 + tb_pz**2 + tb_m**2)
 
-        if Nmu[i] < 1 or Nel[i] < 1 or Njet[i] < 2: skipped += 1; continue
+        if gen:
+            # ── генераторні входи: продукти розпаду з MC-істини ────────────────
+            if mcEventType[i] != 3: skipped += 1; continue  # лише eμ-канал
+            lp = batch_data["mcLp"][i].to_list();  lm = batch_data["mcLm"][i].to_list()
+            b  = batch_data["mcB"][i].to_list();   bb = batch_data["mcBbar"][i].to_list()
+            nu = batch_data["mcNu"][i].to_list();  nub = batch_data["mcNubar"][i].to_list()
+            if min(len(lp), len(lm), len(b), len(bb), len(nu), len(nub)) < 4: skipped += 1; continue
+            lM = gen4_to_dict(lm)   # від'ємний лептон  <- mcLm
+            lP = gen4_to_dict(lp)   # додатний лептон   <- mcLp
+            # b-кварки як b-теговані джети (від'ємна маса = b-тег, як у C++ selectBestJets)
+            jets    = [gen4_to_dict(b), gen4_to_dict(bb)]
+            jmasses = [-abs(float(b[3])), -abs(float(bb[3]))]
+            # MET = сума поперечних імпульсів двох нейтрино
+            met_px[i] = float(nu[0]) + float(nub[0])
+            met_py[i] = float(nu[1]) + float(nub[1])
+        else:
+            if Nmu[i] < 1 or Nel[i] < 1 or Njet[i] < 2: skipped += 1; continue
 
-        mu_pt_val, mu_eta_val, mu_phi_val = float(batch_data["muPt"][i][0]), float(batch_data["muEta"][i][0]), float(batch_data["muPhi"][i][0])
-        el_pt_val, el_eta_val, el_phi_val = float(batch_data["elPt"][i][0]), float(batch_data["elEta"][i][0]), float(batch_data["elPhi"][i][0])
-        
-        lM = {"pt": mu_pt_val, "eta": mu_eta_val, "phi": mu_phi_val, "e": calc_e(mu_pt_val, mu_eta_val, MASS_MU)}
-        lP = {"pt": el_pt_val, "eta": el_eta_val, "phi": el_phi_val, "e": calc_e(el_pt_val, el_eta_val, MASS_EL)}
+            mu_pt_val, mu_eta_val, mu_phi_val = float(batch_data["muPt"][i][0]), float(batch_data["muEta"][i][0]), float(batch_data["muPhi"][i][0])
+            el_pt_val, el_eta_val, el_phi_val = float(batch_data["elPt"][i][0]), float(batch_data["elEta"][i][0]), float(batch_data["elPhi"][i][0])
 
-        jets, jmasses = [], []
-        for j in range(Njet[i]):
-            jpt, jeta, jphi, jm = float(batch_data["jetPt"][i][j]), float(batch_data["jetEta"][i][j]), float(batch_data["jetPhi"][i][j]), float(batch_data["jetMass"][i][j])
-            jets.append({"pt": jpt, "eta": jeta, "phi": jphi, "e": calc_e(jpt, jeta, abs(jm))})
-            jmasses.append(jm)
+            lM = {"pt": mu_pt_val, "eta": mu_eta_val, "phi": mu_phi_val, "e": calc_e(mu_pt_val, mu_eta_val, MASS_MU)}
+            lP = {"pt": el_pt_val, "eta": el_eta_val, "phi": el_phi_val, "e": calc_e(el_pt_val, el_eta_val, MASS_EL)}
+
+            jets, jmasses = [], []
+            for j in range(Njet[i]):
+                jpt, jeta, jphi, jm = float(batch_data["jetPt"][i][j]), float(batch_data["jetEta"][i][j]), float(batch_data["jetPhi"][i][j]), float(batch_data["jetMass"][i][j])
+                jets.append({"pt": jpt, "eta": jeta, "phi": jphi, "e": calc_e(jpt, jeta, abs(jm))})
+                jmasses.append(jm)
 
         jb1, jb2 = select_best_jets_event(lM, lP, jets, jmasses)
         if jb1 is None: skipped += 1; continue
@@ -180,28 +213,33 @@ def process_single_batch(args):
                  llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m], dtype=np.float32)
 
         if not np.all(np.isfinite(feat)): skipped += 1; continue
+        
         inputs.append(feat); targets.append(tgt); lkr_list.append(np.array([mtt_lkr, pttt_lkr, ytt_lkr, phitt_lkr], dtype=np.float32))
+        orig_idx.append(start + i) 
 
-    return inputs, targets, lkr_list, skipped
+    return inputs, targets, lkr_list, orig_idx, skipped
 
-def load_and_prepare(filename, treename="tree"):
-    print(f"[I] Відкриваємо {filename}:{treename}")
+def load_and_prepare(filename, treename="tree", gen=False):
+    print(f"[I] Відкриваємо {filename}:{treename}  (режим входів: {'GEN' if gen else 'DET'})")
     with uproot.open(f"{filename}:{treename}") as tree: total_events = tree.num_entries
-    
-    step_size = 50000
-    ranges = [(filename, treename, i, min(i + step_size, total_events)) for i in range(0, total_events, step_size)]
 
-    all_inputs, all_targets, all_lkr, total_skipped = [], [], [], 0
+    step_size = 50000
+    ranges = [(filename, treename, i, min(i + step_size, total_events), gen) for i in range(0, total_events, step_size)]
+
+    all_inputs, all_targets, all_lkr, all_orig_idx, total_skipped = [], [], [], [], 0
     max_workers = min(6, os.cpu_count() or 1)
 
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        for idx, (inputs, targets, lkr_list, skipped) in enumerate(executor.map(process_single_batch, ranges)):
-            all_inputs.extend(inputs); all_targets.extend(targets); all_lkr.extend(lkr_list); total_skipped += skipped
+        for idx, (inputs, targets, lkr_list, orig_idx, skipped) in enumerate(executor.map(process_single_batch, ranges)):
+            all_inputs.extend(inputs); all_targets.extend(targets); all_lkr.extend(lkr_list)
+            all_orig_idx.extend(orig_idx) # ДОДАЄМО ІНДЕКСИ ДО СПІЛЬНОГО МАСИВУ
+            total_skipped += skipped
             print(f"[I] Батч {idx+1}/{len(ranges)} оброблено.")
 
     X, y, lkr = np.stack(all_inputs, axis=0), np.stack(all_targets, axis=0), np.stack(all_lkr, axis=0)
+    orig_idx_arr = np.array(all_orig_idx)
     print(f"\n[I] Готово для тренування: {len(X)} подій")
-    return X, y, lkr
+    return X, y, lkr, orig_idx_arr
 
 class SolveDataset(Dataset):
     def __init__(self, X, y, norm=None):
@@ -219,7 +257,6 @@ class SolveDataset(Dataset):
     def __len__(self): return len(self.X_raw)
 
     def __getitem__(self, i):
-        # АУГМЕНТАЦІЮ ПРИБРАНО ЗВІДСИ, ПЕРЕНЕСЕНО НА ВІДЕОКАРТУ
         xi = (self.X_raw[i] - self.xm) / self.xs
         yi = self.y_raw[i]
         return torch.from_numpy(xi), torch.from_numpy(yi)
@@ -236,7 +273,6 @@ class SolveMLP(nn.Module):
         super().__init__()
         dim = 128
         self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
-        # ЗАЛИШАЄМО 3 БЛОКИ, ЩОБ НЕ ЗЛАМАТИ weights.py ТА LKRnn.cxx
         self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim)) 
         self.head = nn.Linear(dim, out_dim)
         
@@ -248,7 +284,7 @@ class SolveMLP(nn.Module):
         t = torch.tanh(raw)
         
         # ЖОРСТКИЙ СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (5%)
-        out_0 = t[:, 0] * 0.05  # <--- ТУТ ТІЛЬКИ 0.05
+        out_0 = t[:, 0] * 0.05  
         out_1 = t[:, 1] * 0.20
         out_2 = t[:, 2] * 0.05  
         
@@ -279,41 +315,44 @@ def train(args):
     print(f"[I] Використовуємо пристрій: {device}")
     
     os.makedirs(args.outdir, exist_ok=True)
-    X, y, lkr = load_and_prepare(args.input, args.tree)
-
+    X, y, lkr, orig_idx_arr = load_and_prepare(args.input, args.tree, args.gen)
     N = len(X)
     idx = np.random.RandomState(SEED).permutation(N)
-    n_tr, n_val = int(0.70*N), int(0.15*N)
+    n_tr, n_val = int(0.50*N), int(0.10*N)
     idx_tr, idx_val, idx_te = idx[:n_tr], idx[n_tr:n_tr+n_val], idx[n_tr+n_val:]
 
-    # Більше не передаємо augment=True, бо ми робимо це на GPU
+
+    test_root_entries = orig_idx_arr[idx_te]
+    np.savetxt(args.test_indices, np.sort(test_root_entries), fmt='%d')
+    print(f"\n[I] Збережено {len(test_root_entries)} маркерів тестових подій у файл {args.test_indices}")
+ 
+
     ds_tr = SolveDataset(X[idx_tr], y[idx_tr])
     norm = ds_tr.norm
     ds_val = SolveDataset(X[idx_val], y[idx_val], norm)
 
     with open(os.path.join(args.outdir, "norm_stats.json"), "w") as f: json.dump(norm, f, indent=2)
 
-    # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True
     loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
     model = SolveMLP().to(device)
-    
-    # МАГІЯ PYTORCH 2.0 (TORCH.COMPILE)
-    try:
-        print("[I] Спроба компіляції моделі для максимальної швидкості (torch.compile)...")
-        model = torch.compile(model)
-        print("[I] Модель успішно скомпільовано!")
-    except Exception as e:
-        print("[W] Ваша версія або система не підтримує torch.compile. Тренування продовжиться без нього.")
+
+    # torch.compile лише за явним прапорцем --compile (за замовч. вимкнено:
+    # на деяких системах inductor не збирає CUDA-utils і падає у циклі, а не тут)
+    if args.compile:
+        try:
+            torch._dynamo.config.suppress_errors = True  # fallback у eager при помилці inductor
+            print("[I] Спроба компіляції моделі для максимальної швидкості (torch.compile)...")
+            model = torch.compile(model)
+            print("[I] Модель успішно скомпільовано!")
+        except Exception as e:
+            print("[W] Ваша версія або система не підтримує torch.compile. Тренування продовжиться без нього.")
 
     stopper = EarlyStopping(PATIENCE)
     
-    # --- ВИКОРИСТАННЯ WEIGHTED L1 LOSS ---
-    # Вага 5.0 для маси, 1.0 для pT і y (маса в 5 разів важливіша)
     LOSS_WEIGHTS = torch.tensor([5.0, 1.0, 1.0], device=device)
     criterion = WeightedL1Loss(LOSS_WEIGHTS)
-    # -------------------------------------
     
     optim = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optim, T_max=args.epochs, eta_min=LR*1e-2)
@@ -326,17 +365,14 @@ def train(args):
         for xb, yb in loader_tr:
             xb, yb = xb.to(device), yb.to(device)
             
-            # --- ВЕКТОРИЗОВАНА АУГМЕНТАЦІЯ НА GPU (Блискавично швидко) ---
             alpha = torch.empty(xb.shape[0], device=device).uniform_(0, 2*np.pi)
             c, s  = torch.cos(alpha), torch.sin(alpha)
             
-            # Індекси Px та Py: lepM(1,2), lepP(5,6), jb1(9,10), jb2(13,14), MET(16,17)
             for base in [1, 5, 9, 13, 16]:
                 px = xb[:, base].clone()
                 py = xb[:, base + 1].clone()
                 xb[:, base]     = px * c - py * s
                 xb[:, base + 1] = px * s + py * c
-            # -------------------------------------------------------------
             
             optim.zero_grad()
             loss = criterion(model(xb), yb)
@@ -361,7 +397,6 @@ def train(args):
             print(f"-> Зупинка на епосі {ep} (Patience: {PATIENCE})")
             break
 
-    # Якщо torch.compile був увімкнений, треба дістати "чисті" ваги з _orig_mod
     clean_state_dict = stopper.best_state
     if any(k.startswith('_orig_mod.') for k in clean_state_dict.keys()):
         clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in clean_state_dict.items()}
@@ -372,8 +407,20 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input",  default="mc_signal_merged.root")
+    parser.add_argument("--input",  default="ttbarSel_all.root")
     parser.add_argument("--tree",   default="tree")
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--outdir", default="solve_nn_output")
-    train(parser.parse_args())
+    parser.add_argument("--gen", action="store_true",
+                        help="будувати ознаки з генераторної MC-істини (mcLp, mcB, mcNu...) замість детекторних об'єктів")
+    parser.add_argument("--compile", action="store_true",
+                        help="увімкнути torch.compile (за замовч. вимкнено — стабільніше)")
+    parser.add_argument("--outdir", default=None,
+                        help="каталог виходу (за замовч. solve_nn_output, або solve_nn_gen_output для --gen)")
+    parser.add_argument("--test-indices", dest="test_indices", default=None,
+                        help="файл тестових індексів (за замовч. test_indices.txt, або test_indices_gen.txt для --gen)")
+    args = parser.parse_args()
+    if args.outdir is None:
+        args.outdir = "solve_nn_gen_output" if args.gen else "solve_nn_output"
+    if args.test_indices is None:
+        args.test_indices = "test_indices_gen.txt" if args.gen else "test_indices.txt"
+    train(args)

@@ -2,7 +2,7 @@
 #include "krvars.h"
 
 LKRv3::LKRv3() : KinRecoBase("lkrv3") {}
-
+LKRv3::LKRv3(const std::string& name) : KinRecoBase(name) {}
 std::vector<TLorentzVector> LKRv3::reconstruct(
     const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
     const std::vector<TLorentzVector>& vecJets, Float_t* jetBTagDiscr, const double bTagDiscrL,
@@ -74,7 +74,7 @@ bool LKRv3::selectBestJets(
         foundPair = true;
         }
     }
-
+    printf("%d",foundPair);
     return foundPair;
 }
 

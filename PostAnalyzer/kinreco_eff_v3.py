@@ -11,7 +11,7 @@ tree = uproot.open(filename)["ttbarTree"]
 # Визначення масивів для зчитування
 #kinrecos = ['lkrv2']
 kinrecos = ['lkr','lkrv3','lkrnn']
-variables = ['mtt', 'pttt', 'ytt', 'phitt','dphitt']
+variables = ['mtt', 'pttt', 'ytt']
 arrays = tree.arrays(
     [f"{v}_{k}" for v in variables for k in kinrecos] + [f"{v}_gen" for v in variables],
     library="np"
@@ -39,7 +39,7 @@ labels = {
     'phitt': '$\\phi(t\\bar{t})$',
     'dphitt': r'$\Delta\phi(t\bar{t})$'
 }
-positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (1, 0), 'phitt': (1, 1), 'dphitt': (0, 2)}
+positions = {'mtt': (0, 0), 'pttt': (0, 1), 'ytt': (0, 2)}
 # Функція обчислення
 def calculate_efficiency(reco, gen, bins, variable):
     bin_centers = []
@@ -69,29 +69,25 @@ def calculate_efficiency(reco, gen, bins, variable):
             resolution_unc.append(float('nan'))
         else:
             efficiency.append(rec_events / events_gen)
-            # похибка дорівнює sqrt(E*(1-E)/N_gen), E=N_rec/N-gen
             efficiency_unc.append(np.sqrt(efficiency[-1]*(1-efficiency[-1])/events_gen))
-            # рахуємо зсув (bias): bias = sum(rec-gen)/N
-            # N це кількість вдало реконструйованих подій (використовуємо лише їх)
-            # це рахується як середнє значення (mean) всіх rec-gen значень
-            reco_final = reco[mask_bin & mask_reco]
-            gen_final = gen[mask_bin & mask_reco]
-            # один раз рахуємо і зберігаємо різницю rec-gen
-            residual = reco_final - gen_final
-            if variable == 'phitt':
-                residual[residual > np.pi] = residual[residual > np.pi] - 2*np.pi
-                residual[residual < -np.pi] = residual[residual < -np.pi] + 2*np.pi
-            bias.append(np.mean(residual))
-            # рахуємо роздільну здатність (resolution): sigma = sqrt(sum((rec-gen)^2-mean((rec-gen)^2)/n))
-            # роздільна здатність це квадратний корінь із варіації (variance)
-            # див. https://pdg.lbl.gov/ -> "Reviews, tables, plots" -> "Mathematicl tools" -> "Statistics" -> "40.2.1Estimators for mean, variance, and median"
-            #resolution.append(np.std(residual)) # це короткий метод
-            # це явний вигляд:
-            resolution.append(np.sqrt(np.mean((residual-bias[-1])**2)))
-            # рахуємо похибки на зсув (sigma/sqrt(n)) та роздільну здатність (sigma/sqrt(2n))
-            n = len(gen_final)
-            bias_unc.append(resolution[-1]/np.sqrt(n))
-            resolution_unc.append(np.sqrt(np.sqrt(np.mean((residual-bias[-1])**4)-resolution[-1]**4)/n))
+            if rec_events == 0:
+                bias.append(float('nan'))
+                bias_unc.append(float('nan'))
+                resolution.append(float('nan'))
+                resolution_unc.append(float('nan'))
+            else:
+                reco_final = reco[mask_bin & mask_reco]
+                gen_final = gen[mask_bin & mask_reco]
+                residual = reco_final - gen_final
+                if variable == 'phitt':
+                    residual[residual > np.pi] = residual[residual > np.pi] - 2*np.pi
+                    residual[residual < -np.pi] = residual[residual < -np.pi] + 2*np.pi
+                bias.append(np.mean(residual))
+                resolution.append(np.sqrt(np.mean((residual-bias[-1])**2)))
+                n = len(gen_final)
+                bias_unc.append(resolution[-1]/np.sqrt(n))
+                mu4 = np.mean((residual-bias[-1])**4)
+                resolution_unc.append(np.sqrt(max(mu4 - resolution[-1]**4, 0.0) / n))
     return bin_centers, efficiency, efficiency_unc, bias, bias_unc, resolution, resolution_unc
 
 # Обчислення ефективності, bias, resolution у циклі
@@ -110,8 +106,8 @@ for kinreco in kinrecos:
                 f.write('\n')
 
 # Побудова графіків ефективності
-fig_eff, axs_eff = plt.subplots(3, 3, figsize=(12, 12))
-fig_eff.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
+fig_eff, axs_eff = plt.subplots(1, 3, figsize=(15, 5), squeeze=False)
+fig_eff.subplots_adjust(0.07, 0.12, 0.98, 0.88, wspace=0.32)
 
 
 for variable in variables:
@@ -132,48 +128,68 @@ fig_eff.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\
 fig_eff.savefig('plots/efficiency.pdf')
 fig_eff.savefig('plots/efficiency.png')
 
-fig_bias, axs_bias = plt.subplots(3, 3, figsize=(12, 12))
-fig_bias.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
+fig_bias, axs_bias = plt.subplots(1, 3, figsize=(15, 5), squeeze=False)
+fig_bias.subplots_adjust(0.07, 0.12, 0.98, 0.88, wspace=0.32)
 
 for variable in variables:
     i, j = positions[variable]
+    all_bias = []
     for kinreco in kinrecos:
         bin_centers = results[kinreco][variable][0]
         bias = results[kinreco][variable][3]
         bias_unc = results[kinreco][variable][4]
         axs_bias[i, j].errorbar(bin_centers, bias, bias_unc, marker='o', markersize=5, label=kinreco.upper())
+        all_bias += [b for b in bias if b == b]  # відкидаємо NaN
     axs_bias[i, j].set_xlabel(labels[variable])
     axs_bias[i, j].set_ylabel('Bias')
     axs_bias[i, j].legend()
     axs_bias[i, j].grid(True)
+    # масштаб за самими значеннями bias, а не за (роздутими) похибками
+    if all_bias:
+        lo, hi = min(all_bias), max(all_bias)
+        pad = 0.2 * (hi - lo) if hi > lo else max(abs(hi), 1.0)
+        axs_bias[i, j].set_ylim(lo - pad, hi + pad)
 
 fig_bias.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV\nBias of reconstructed variables')
 fig_bias.savefig('plots/bias.pdf')
 fig_bias.savefig('plots/bias.png')
 
 
-fig_res, axs_res = plt.subplots(3, 3, figsize=(12, 12))
-fig_res.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
+fig_res, axs_res = plt.subplots(1, 3, figsize=(15, 5), squeeze=False)
+fig_res.subplots_adjust(0.07, 0.12, 0.98, 0.88, wspace=0.32)
 
 for variable in variables:
     i, j = positions[variable]
+    # 1-й прохід: масштаб за самими значеннями роздільної здатності
+    all_res = []
+    for kinreco in kinrecos:
+        all_res += [r for r in results[kinreco][variable][5] if r == r]  # без NaN
+    ymax = max(all_res) * 1.25 if all_res else None
+    err_cap = 0.3 * ymax if ymax else None  # обмеження довжини похибок для відображення
+    # 2-й прохід: побудова з обрізаними похибками (малі — незмінні, роздуті — обрізані)
     for kinreco in kinrecos:
         bin_centers = results[kinreco][variable][0]
         resolution = results[kinreco][variable][5]
         resolution_unc = results[kinreco][variable][6]
-        axs_res[i, j].errorbar(bin_centers, resolution, resolution_unc, marker='o', markersize=5, label=kinreco.upper())
+        if err_cap is not None:
+            resolution_unc = [min(u, err_cap) if u == u else 0.0 for u in resolution_unc]
+        axs_res[i, j].errorbar(bin_centers, resolution, resolution_unc, marker='o',
+                               markersize=5, elinewidth=1.0, capsize=2, alpha=0.85,
+                               label=kinreco.upper())
     axs_res[i, j].set_xlabel(labels[variable])
     axs_res[i, j].set_ylabel('Resolution')
     axs_res[i, j].legend()
     axs_res[i, j].grid(True)
+    if ymax:
+        axs_res[i, j].set_ylim(0, ymax)
 
 fig_res.suptitle('CMS open data $pp \\to t\\bar{t}$, dilepton decay channel, $\\sqrt{s}=7$ TeV\nResolution of reconstructed variables')
 fig_res.savefig('plots/resolution.pdf')
 fig_res.savefig('plots/resolution.png')
 
 # --- Побудова графіків відношення ---
-fig_ratio, axs_ratio = plt.subplots(3, 3, figsize=(12, 12))
-fig_ratio.subplots_adjust(0.11, 0.08, 0.97, 0.93, wspace=0.28)
+fig_ratio, axs_ratio = plt.subplots(1, 3, figsize=(15, 5), squeeze=False)
+fig_ratio.subplots_adjust(0.07, 0.12, 0.98, 0.88, wspace=0.32)
 
 for variable in variables:
     if variable not in positions: continue

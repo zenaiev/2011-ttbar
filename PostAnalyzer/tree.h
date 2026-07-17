@@ -77,6 +77,12 @@ public :
    Int_t           mcEventType; // type of event: 1 ttbar decay into ee, 2 ttbar decay into mumu, 3 ttbar decay into emu, 0 anything else
    float mcT[4];    // top quark four momentum
    float mcTbar[4]; // antitop quark four momentum
+   float mcB[4];    // b quark four momentum
+   float mcBbar[4]; // anti-b quark four momentum
+   float mcLp[4];   // positive lepton four momentum
+   float mcLm[4];   // negative lepton four momentum
+   float mcNu[4];   // neutrino four momentum
+   float mcNubar[4];// anti-neutrino four momentum
 
    // List of branches (their names follow variable names with prefix b_)
    TBranch        *b_evRunNumber;   //!
@@ -123,6 +129,12 @@ public :
    TBranch        *b_mcEventType; //!
    TBranch        *b_mcT; //!
    TBranch        *b_mcTbar; //!
+   TBranch        *b_mcB; //!
+   TBranch        *b_mcBbar; //!
+   TBranch        *b_mcLp; //!
+   TBranch        *b_mcLm; //!
+   TBranch        *b_mcNu; //!
+   TBranch        *b_mcNubar; //!
 
    // constructor
    // argument: true for MC, false (default) for data
@@ -187,6 +199,12 @@ void ZTree::Init(TTree *tree)
    if(_flagMC) fChain->SetBranchAddress("mcEventType", &mcEventType, &b_mcEventType);
    if(_flagMC) fChain->SetBranchAddress("mcT", mcT, &b_mcT);
    if(_flagMC) fChain->SetBranchAddress("mcTbar", mcTbar, &b_mcTbar);
+   if(_flagMC) fChain->SetBranchAddress("mcB", mcB, &b_mcB);
+   if(_flagMC) fChain->SetBranchAddress("mcBbar", mcBbar, &b_mcBbar);
+   if(_flagMC) fChain->SetBranchAddress("mcLp", mcLp, &b_mcLp);
+   if(_flagMC) fChain->SetBranchAddress("mcLm", mcLm, &b_mcLm);
+   if(_flagMC) fChain->SetBranchAddress("mcNu", mcNu, &b_mcNu);
+   if(_flagMC) fChain->SetBranchAddress("mcNubar", mcNubar, &b_mcNubar);
 }
 
 #endif // #ifdef ZTree_h

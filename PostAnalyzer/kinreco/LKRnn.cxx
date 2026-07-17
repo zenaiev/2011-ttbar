@@ -1,7 +1,27 @@
 #include "LKRnn.h"
-#include "nn_weights.h"
+#include "nn_weights.h"      // namespace NNWeights      (детекторна модель)
+#include "nn_weights_gen.h"  // namespace NNWeights_gen  (генераторна модель)
 #include <cmath>
 #include <vector>
+
+// заповнити NNParams вказівниками на ваги заданого namespace
+#define FILL_NNPARAMS(P, NS) do {                                             \
+    P.ip0w = &NS::input_proj_0_weight; P.ip0b = &NS::input_proj_0_bias;       \
+    P.ip1w = &NS::input_proj_1_weight; P.ip1b = &NS::input_proj_1_bias;       \
+    P.b0_0w = &NS::blocks_0_net_0_weight; P.b0_0b = &NS::blocks_0_net_0_bias; \
+    P.b0_1w = &NS::blocks_0_net_1_weight; P.b0_1b = &NS::blocks_0_net_1_bias; \
+    P.b0_3w = &NS::blocks_0_net_3_weight; P.b0_3b = &NS::blocks_0_net_3_bias; \
+    P.b0_4w = &NS::blocks_0_net_4_weight; P.b0_4b = &NS::blocks_0_net_4_bias; \
+    P.b1_0w = &NS::blocks_1_net_0_weight; P.b1_0b = &NS::blocks_1_net_0_bias; \
+    P.b1_1w = &NS::blocks_1_net_1_weight; P.b1_1b = &NS::blocks_1_net_1_bias; \
+    P.b1_3w = &NS::blocks_1_net_3_weight; P.b1_3b = &NS::blocks_1_net_3_bias; \
+    P.b1_4w = &NS::blocks_1_net_4_weight; P.b1_4b = &NS::blocks_1_net_4_bias; \
+    P.b2_0w = &NS::blocks_2_net_0_weight; P.b2_0b = &NS::blocks_2_net_0_bias; \
+    P.b2_1w = &NS::blocks_2_net_1_weight; P.b2_1b = &NS::blocks_2_net_1_bias; \
+    P.b2_3w = &NS::blocks_2_net_3_weight; P.b2_3b = &NS::blocks_2_net_3_bias; \
+    P.b2_4w = &NS::blocks_2_net_4_weight; P.b2_4b = &NS::blocks_2_net_4_bias; \
+    P.hw = &NS::head_weight; P.hb = &NS::head_bias;                           \
+} while(0)
 
 static std::vector<float> linear_layer(
     const std::vector<float>& in, const std::vector<float>& w, const std::vector<float>& b)
@@ -53,9 +73,16 @@ static std::vector<float> res_block(
     return h;
 }
 
-LKRnn::LKRnn() : LKRv3("lkrnn") {
-    x_mean = NNWeights::x_mean;
-    x_std  = NNWeights::x_std;
+LKRnn::LKRnn(bool useGen) : LKRv3("lkrnn") {
+    if (useGen) {
+        x_mean = NNWeights_gen::x_mean;
+        x_std  = NNWeights_gen::x_std;
+        FILL_NNPARAMS(_p, NNWeights_gen);
+    } else {
+        x_mean = NNWeights::x_mean;
+        x_std  = NNWeights::x_std;
+        FILL_NNPARAMS(_p, NNWeights);
+    }
 }
 
 std::vector<TLorentzVector> LKRnn::reconstruct(
@@ -143,21 +170,18 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = (x[i] - x_mean[i]) / (x_std[i] + 1e-8f);
 
-    // ── 5. Інференс (3 БЛОКИ) ───────────────────────────
-    using namespace NNWeights;
-    auto h = linear_layer(x, input_proj_0_weight, input_proj_0_bias);
-    h = layer_norm(h, input_proj_1_weight, input_proj_1_bias);
+    // ── 5. Інференс (3 БЛОКИ) з ваг обраної моделі (_p) ───────────────────────
+    auto h = linear_layer(x, *_p.ip0w, *_p.ip0b);
+    h = layer_norm(h, *_p.ip1w, *_p.ip1b);
     silu_inplace(h);
 
-    h = res_block(h, blocks_0_net_0_weight, blocks_0_net_0_bias, blocks_0_net_1_weight, blocks_0_net_1_bias, blocks_0_net_3_weight, blocks_0_net_3_bias, blocks_0_net_4_weight, blocks_0_net_4_bias);
-    h = res_block(h, blocks_1_net_0_weight, blocks_1_net_0_bias, blocks_1_net_1_weight, blocks_1_net_1_bias, blocks_1_net_3_weight, blocks_1_net_3_bias, blocks_1_net_4_weight, blocks_1_net_4_bias);
-    h = res_block(h, blocks_2_net_0_weight, blocks_2_net_0_bias, blocks_2_net_1_weight, blocks_2_net_1_bias, blocks_2_net_3_weight, blocks_2_net_3_bias, blocks_2_net_4_weight, blocks_2_net_4_bias);
+    h = res_block(h, *_p.b0_0w, *_p.b0_0b, *_p.b0_1w, *_p.b0_1b, *_p.b0_3w, *_p.b0_3b, *_p.b0_4w, *_p.b0_4b);
+    h = res_block(h, *_p.b1_0w, *_p.b1_0b, *_p.b1_1w, *_p.b1_1b, *_p.b1_3w, *_p.b1_3b, *_p.b1_4w, *_p.b1_4b);
+    h = res_block(h, *_p.b2_0w, *_p.b2_0b, *_p.b2_1w, *_p.b2_1b, *_p.b2_3w, *_p.b2_3b, *_p.b2_4w, *_p.b2_4b);
 
-    auto out = linear_layer(h, head_weight, head_bias);
+    auto out = linear_layer(h, *_p.hw, *_p.hb);
 
     // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
-    // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!
-    // ── 6. ВІДНОВЛЕННЯ З ФІЛІГРАННИМ ОБМЕЖЕННЯМ ────────────────────
     float d_log_mtt  = std::tanh(out[0]) * 0.05f; // <--- ТУТ ТІЛЬКИ 0.05f
     float d_log_pttt = std::tanh(out[1]) * 0.20f;
     float d_ytt      = std::tanh(out[2]) * 0.05f;

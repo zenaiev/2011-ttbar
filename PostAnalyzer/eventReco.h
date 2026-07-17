@@ -10,6 +10,8 @@
 #include "selection.h"
 #include "settings.h"
 #include "read_config.h"
+#include <unordered_set>
+#include <fstream>
 // C++ library or ROOT header files
 #include <map>
 #include <TChain.h>
@@ -292,6 +294,15 @@ void eventreco(ZEventRecoInput in)
   //TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
   //TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
 
+  // NN input/model selection (read early: needed for LKRnn construction below)
+  // krGenInputs: 1 -> feed reconstruction with generator-level MC truth (mcLp, mcB, mcNu...)
+  // krNNGen:     1 -> LKRnn uses generator-trained weights (NNWeights_gen) and the gen test set
+  //              (default: matches krGenInputs)
+  int krGenInputs = read_int(in.nameConfigFile, "krGenInputs", 0);
+  int krNNGen     = read_int(in.nameConfigFile, "krNNGen", krGenInputs);
+  if(krGenInputs) printf("[I] krGenInputs=1: kinematic reconstruction uses GENERATOR-LEVEL inputs\n");
+  if(krNNGen)     printf("[I] krNNGen=1: LKRnn uses GENERATOR-trained weights (NNWeights_gen)\n");
+
   // vector of kinematic reconstruction methods
   std::vector<KinRecoBase*> kinrecos;
   if (read_int(in.nameConfigFile, "kr_FKR", 1)) kinrecos.push_back(new FKR());
@@ -299,7 +310,7 @@ void eventreco(ZEventRecoInput in)
   if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
   if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) kinrecos.push_back(new LKRv2());
   if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) kinrecos.push_back(new LKRv3());
-  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn());
+  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn(krNNGen));
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
@@ -335,10 +346,37 @@ void eventreco(ZEventRecoInput in)
     tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
     tree_kr->Branch("dphitt_gen", &dphitt_gen, "dphitt_gen/F");
   }
+  // =========================================================================
+  // 1. ВСТАВКА ДО ЦИКЛУ: Читання тестових індексів тільки для mcSigReco
+  // =========================================================================
+  std::unordered_set<long long> test_indices;
+  if(in.Name == "mcSigReco") {
+    // gen-навчена модель має власний тестовий набір (test_indices_gen.txt)
+    const char* idxFile = krNNGen ? "test_indices_gen.txt" : "test_indices.txt";
+    std::ifstream infile(idxFile);
+    long long temp_idx;
+    if (infile.is_open()) {
+      while (infile >> temp_idx) {
+        test_indices.insert(temp_idx);
+      }
+      printf("[I] Завантажено %zu подій для незалежного тестування (%s).\n", test_indices.size(), idxFile);
+    } else {
+      printf("[W] Файл %s не знайдено! Будуть оброблені ВСІ події.\n", idxFile);
+    }
+  }
+  // =========================================================================
+  
   // event loop
+  printf("nevents=%d\n", nEvents);
   for(int e = 0; e < nEvents; e++)
   {
+    printf("before test indices \n");
+    if(in.Name == "mcSigReco" && !test_indices.empty() && test_indices.find(e) == test_indices.end()) {
+        continue; // Якщо події немає в test_indices.txt, просто переходимо до наступної
+    } 
+    printf("passed test indices \n");
     chain->GetEntry(e);
+    printf("mcEventType=%d, type=%d, channel=%d \n", preselTree->mcEventType, in.Type, in.Channel);
     if(flagMC)
     {
       // skip background events for MC signal
@@ -346,6 +384,7 @@ void eventreco(ZEventRecoInput in)
       // skip signal events for MC 'ttbar other' (background)
       if(in.Type == 3 && preselTree->mcEventType == in.Channel) continue;
     }
+    printf("passed type check \n");
     // process generator level if needed
     if(in.Gen)
     {
@@ -359,6 +398,7 @@ void eventreco(ZEventRecoInput in)
       nGen++;
       continue;
     }
+    printf("passed prepare 4vectors\n");
     if(in.Type > 1)
       nGen++;
     
@@ -478,12 +518,36 @@ void eventreco(ZEventRecoInput in)
       dphitt_gen = dphi_gen;
     }
 
+    // choose inputs for kinematic reconstruction: detector-level (default) or
+    // generator-level MC truth (closure test, krGenInputs=1). The very same
+    // selected events are used in both cases, only the input objects differ.
+    TLorentzVector krLepM = vecLepM, krLepP = vecLepP;
+    std::vector<TLorentzVector> krJets = vecJets;
+    Float_t krMetPx = preselTree->metPx, krMetPy = preselTree->metPy;
+    Float_t genBTag[2] = {1.0f, 1.0f};
+    Float_t* krBTag = preselTree->jetBTagDiscr;
+    if(krGenInputs)
+    {
+      krLepP.SetXYZM(preselTree->mcLp[0], preselTree->mcLp[1], preselTree->mcLp[2], preselTree->mcLp[3]);
+      krLepM.SetXYZM(preselTree->mcLm[0], preselTree->mcLm[1], preselTree->mcLm[2], preselTree->mcLm[3]);
+      TLorentzVector genB, genBbar;
+      genB.SetXYZM(preselTree->mcB[0], preselTree->mcB[1], preselTree->mcB[2], preselTree->mcB[3]);
+      genBbar.SetXYZM(preselTree->mcBbar[0], preselTree->mcBbar[1], preselTree->mcBbar[2], preselTree->mcBbar[3]);
+      // mark as b-tagged for the reconstruction (negative-mass convention, see selectBestJets)
+      genB.SetPtEtaPhiM(genB.Pt(), genB.Eta(), genB.Phi(), -1 * genB.M());
+      genBbar.SetPtEtaPhiM(genBbar.Pt(), genBbar.Eta(), genBbar.Phi(), -1 * genBbar.M());
+      krJets = { genB, genBbar };
+      krMetPx = preselTree->mcNu[0] + preselTree->mcNubar[0];
+      krMetPy = preselTree->mcNu[1] + preselTree->mcNubar[1];
+      krBTag = genBTag;
+    }
+
     // run kinematic reconstruction to restore the top and antitop momenta
     bool flagPassedKinRec = false; // status used to go further to fill histograms
     TLorentzVector t, tbar; // vectors used to fill histograms
     for (auto& kr : kinrecos) {
       kr->reset_vars();
-      std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
+      std::vector<TLorentzVector> solution = kr->reconstruct(krLepM, krLepP, krJets, krBTag, bTagDiscrL, krMetPx, krMetPy);
       if(solution.size()) {
         kr->calculate_vars(solution[0], solution[1], solution[2]);
       }
