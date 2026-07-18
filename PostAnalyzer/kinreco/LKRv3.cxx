@@ -2,6 +2,7 @@
 #include "krvars.h"
 
 LKRv3::LKRv3() : KinRecoBase("lkrv3") {}
+LKRv3::LKRv3(const std::string& name) : KinRecoBase(name) {}
 
 std::vector<TLorentzVector> LKRv3::reconstruct(
     const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,

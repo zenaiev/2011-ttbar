@@ -5,6 +5,7 @@
 class LKRv3: public KinRecoBase {
   public:
     LKRv3();
+    LKRv3(const std::string& name); // named instance (e.g. for subclasses like LKRnn)
     virtual std::vector<TLorentzVector> reconstruct(
       const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
       const std::vector<TLorentzVector>& vecJets, Float_t* jetBTagDiscr, const double bTagDiscrL,
