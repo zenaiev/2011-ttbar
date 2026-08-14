@@ -23,7 +23,7 @@
 #include "kinreco/LKR.h"
 #include "kinreco/LKRv2.h"
 #include "kinreco/LKRv3.h"
-//#include "kinreco/LKRnn.h"
+#include "kinreco/LKRnn.h"
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>> ZVarHisto class >>>>>>>>>>>>>>>>>>>>>>>>>>>>
 // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -329,7 +329,19 @@ void eventreco(ZEventRecoInput in)
     kinrecos.push_back(new LKRv3());
     add_kr_to_vec(new LKRv3(), "lkrv3_gen", kinrecos_gen);
   }
-  //if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn());
+  // LKRnn: нейромережева корекція поверх LKRv3.
+  //   krNNGen=0 -> детекторна гілка бере ДЕТЕКТОРНУ модель (звичайний режим);
+  //   krNNGen=1 -> детекторна гілка бере ГЕНЕРАТОРНУ модель (крос-тест gen-моделі на det-даних).
+  // Генераторна гілка (lkrnn_gen) ЗАВЖДИ використовує генераторну модель — застосовувати
+  // детекторну модель на gen-рівні сенсу не має.
+  int krNNGen = read_int(in.nameConfigFile, "krNNGen", 0);
+  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) {
+    printf("[I] LKRnn: детекторна гілка -> %s модель\n", krNNGen ? "ГЕНЕРАТОРНА (крос-тест)" : "детекторна");
+    kinrecos.push_back(new LKRnn(krNNGen));
+    add_kr_to_vec(new LKRnn(true), "lkrnn_gen", kinrecos_gen);
+  }
+  // окремий LKRv3 для дампу 26 NN-ознак (LKRv3::computeFeatures) — незалежно від kr_LKRv3
+  LKRv3* kinreco_lkrv3_feat = new LKRv3();
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
@@ -366,6 +378,7 @@ void eventreco(ZEventRecoInput in)
   float mcMetPx, mcMetPy;
   float recoLm[4], recoLp[4], recoJ1[4], recoJ2[4];
   float recoMetPx, recoMetPy;
+  float nn_features[26], nn_features_gen[26]; // 26 NN-ознак (det / gen), -999 якщо джети не відібрані
   if (tree_kr) {
     //gen branches
     tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
@@ -388,6 +401,8 @@ void eventreco(ZEventRecoInput in)
       tree_kr->Branch("recoJ2", &recoJ2, "recoJ2[4]/F");
       tree_kr->Branch("recoMetPx", &recoMetPx, "recoMetPx/F");
       tree_kr->Branch("recoMetPy", &recoMetPy, "recoMetPy/F");
+      tree_kr->Branch("nn_features", nn_features, "nn_features[26]/F");
+      tree_kr->Branch("nn_features_gen", nn_features_gen, "nn_features_gen[26]/F");
     }
   }
   // event loop
@@ -536,6 +551,7 @@ void eventreco(ZEventRecoInput in)
           }
           recoMetPx = recoMetPy = -999.;
         }
+        for(int i = 0; i < 26; i++) nn_features[i] = -999.;
       }
     }
     else {
@@ -567,6 +583,14 @@ void eventreco(ZEventRecoInput in)
         }
         recoMetPx = preselTree->metPx;
         recoMetPy = preselTree->metPy;
+        // 26 NN-ознак (det): з ВЛАСНИХ LKRv3-джетів (не LKR-них recoJ1/recoJ2),
+        // щоб збігатися з тим, що LKRnn рахує на inference
+        for(int i = 0; i < 26; i++) nn_features[i] = -999.;
+        TLorentzVector jbf1, jbf2;
+        if(kinreco_lkrv3_feat->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jbf1, jbf2)) {
+          std::vector<float> ftr = kinreco_lkrv3_feat->computeFeatures(vecLepM, vecLepP, jbf1, jbf2, preselTree->metPx, preselTree->metPy);
+          for(int i = 0; i < 26; i++) nn_features[i] = ftr[i];
+        }
       }
     }
     // event selection done: increment the counter of selected events
@@ -617,6 +641,13 @@ void eventreco(ZEventRecoInput in)
           if(solution.size()) {
             kr->calculate_vars(solution[0], solution[1], solution[2]);
           }
+        }
+        // 26 NN-ознак (gen) з LKRv3-джетів на генераторних входах
+        for(int i = 0; i < 26; i++) nn_features_gen[i] = -999.;
+        TLorentzVector jbg1, jbg2;
+        if(kinreco_lkrv3_feat->selectBestJetsPublic(vecLepM_gen[0], vecLepP_gen[0], vecJets_gen, &fake_btag[0], bTagDiscrL, jbg1, jbg2)) {
+          std::vector<float> ftr = kinreco_lkrv3_feat->computeFeatures(vecLepM_gen[0], vecLepP_gen[0], jbg1, jbg2, mcMetPx, mcMetPy);
+          for(int i = 0; i < 26; i++) nn_features_gen[i] = ftr[i];
         }
       }
     }

@@ -1,5 +1,4 @@
 import argparse, json, os, time
-import concurrent.futures
 import numpy as np
 import torch
 import torch.nn as nn
@@ -23,185 +22,63 @@ if torch.cuda.is_available():
     # Оптимізація для відеокарт NVIDIA
     torch.backends.cudnn.benchmark = True
 
-def invariant_mass_2body(pt1, eta1, phi1, e1, pt2, eta2, phi2, e2):
-    px = pt1*np.cos(phi1) + pt2*np.cos(phi2)
-    py = pt1*np.sin(phi1) + pt2*np.sin(phi2)
-    pz = pt1*np.sinh(eta1) + pt2*np.sinh(eta2)
-    e  = e1 + e2
-    return np.sqrt(np.maximum(e*e - px*px - py*py - pz*pz, 0.0))
+def load_and_prepare(inputs, treename="ttbarTree", level="det"):
+    """Читає вихід eventReco: 26 готових ознак (nn_features) + база LKRv3 + gen-ціль,
+    з одного чи кількох файлів (усі канали). Ознаки й база рахуються C++ (LKRv3::computeFeatures),
+    тож train/inference повністю збігаються.
+      level='det' -> детекторні гілки, лише reco_passed_selection==1 (вимога: події,
+                     що не пройшли eventReco-відбір, у тренування НЕ потрапляють);
+      level='gen' -> генераторні гілки (_gen), усі події.
+    """
+    if isinstance(inputs, str):
+        inputs = [inputs]
+    suffix = "" if level == "det" else "_gen"
+    fbr = "nn_features" if level == "det" else "nn_features_gen"
+    Xs, ys, lkrs, origins = [], [], [], []   # origins: (канал, ROOT-entry) кожної події
+    import re
+    for fname in inputs:
+        print(f"[I] Відкриваємо {fname}:{treename} (рівень {level})")
+        m_ch = re.search(r"_(\d+)\.root$", fname)
+        channel = int(m_ch.group(1)) if m_ch else 0   # канал з імені файлу
+        tree = uproot.open(f"{fname}:{treename}")
+        keys = [fbr, f"mtt_lkrv3{suffix}", f"pttt_lkrv3{suffix}", f"ytt_lkrv3{suffix}",
+                "mtt_gen", "pttt_gen", "ytt_gen", f"lkrv3{suffix}"]
+        if level == "det":
+            keys.append("reco_passed_selection")
+        a = tree.arrays(keys, library="np")
+        feats    = np.stack(a[fbr]).astype(np.float32)   # (N, 26) готові ознаки з C++
+        mtt_lkr  = a[f"mtt_lkrv3{suffix}"]
+        pttt_lkr = a[f"pttt_lkrv3{suffix}"]
+        ytt_lkr  = a[f"ytt_lkrv3{suffix}"]
+        mtt_gen, pttt_gen, ytt_gen = a["mtt_gen"], a["pttt_gen"], a["ytt_gen"]
 
-def select_best_jets_event(lepM, lepP, jets, jet_masses):
-    n = len(jets)
-    best_bTag, best_pTSum, found = 0, 0.0, False
-    jb1 = jb2 = None
-    for i in range(n):
-        j1 = jets[i]
-        flagLepM1 = invariant_mass_2body(j1["pt"],j1["eta"],j1["phi"],j1["e"], lepM["pt"],lepM["eta"],lepM["phi"],lepM["e"]) < 180.
-        flagLepP1 = invariant_mass_2body(j1["pt"],j1["eta"],j1["phi"],j1["e"], lepP["pt"],lepP["eta"],lepP["phi"],lepP["e"]) < 180.
-        if not (flagLepM1 or flagLepP1): continue
-        for k in range(n):
-            if i == k: continue
-            j2 = jets[k]
-            flagLepM2 = invariant_mass_2body(j2["pt"],j2["eta"],j2["phi"],j2["e"], lepM["pt"],lepM["eta"],lepM["phi"],lepM["e"]) < 180.
-            flagLepP2 = invariant_mass_2body(j2["pt"],j2["eta"],j2["phi"],j2["e"], lepP["pt"],lepP["eta"],lepP["phi"],lepP["e"]) < 180.
-            if not (flagLepM2 or flagLepP2): continue
-            nTrue = int(flagLepM1)+int(flagLepP1)+int(flagLepM2)+int(flagLepP2)
-            if nTrue == 2:
-                if ((flagLepM1 and flagLepP1) or (flagLepM2 and flagLepP2) or (flagLepM1 and flagLepM2) or (flagLepP1 and flagLepP2)): continue
-            bTag = int(jet_masses[i] < 0) + int(jet_masses[k] < 0)
-            if bTag < best_bTag: continue
-            if bTag > best_bTag: best_pTSum = 0.0
-            best_bTag = bTag
-            pTSum = j1["pt"] + j2["pt"]
-            if pTSum < best_pTSum: continue
-            best_pTSum = pTSum
-            def fix(j, m):
-                if m < 0:
-                    pt,eta,phi,mpos = j["pt"],j["eta"],j["phi"],-m
-                    px,py,pz = pt*np.cos(phi), pt*np.sin(phi), pt*np.sinh(eta)
-                    return {"pt":pt,"eta":eta,"phi":phi,"e":np.sqrt(px*px+py*py+pz*pz+mpos*mpos)}
-                return j
-            jb1, jb2, found = fix(j1,jet_masses[i]), fix(j2,jet_masses[k]), True
-    return (jb1, jb2) if found else (None, None)
+        # відбір: eventReco-селекція (det), заповнені ознаки, успішний LKRv3, фізична база
+        ok = (feats[:, 0] != -999) & (a[f"lkrv3{suffix}"] == 1)
+        if level == "det":
+            ok &= (a["reco_passed_selection"] == 1)      # <-- лише події, що пройшли eventReco
+        ok &= np.isfinite(mtt_lkr) & (mtt_lkr > 300) & (mtt_lkr < 7000)
+        ok &= np.isfinite(mtt_gen) & (mtt_gen > 0)
 
-def ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars):
-    tt_e  = t_e  + tb_e
-    tt_px = t_px + tb_px
-    tt_py = t_py + tb_py
-    tt_pz = t_pz + tb_pz
+        # ціль: залишок у лог-просторі (точно як на inference LKRnn)
+        log_mtt_base = np.log(np.maximum(mtt_lkr[ok], 300.0))
+        log_ptt_base = np.log(pttt_lkr[ok] + 1.0)
+        d_log_mtt = np.log(mtt_gen[ok]) - log_mtt_base
+        d_log_ptt = np.log(pttt_gen[ok] + 1.0) - log_ptt_base
+        d_ytt     = ytt_gen[ok] - ytt_lkr[ok]
 
-    mtt2 = tt_e**2 - tt_px**2 - tt_py**2 - tt_pz**2
-    mtt  = np.sqrt(max(mtt2, 0.0))
-    if mtt < 300.0: return np.array([np.nan]*3, dtype=np.float32)
+        Xs.append(feats[ok])
+        ys.append(np.stack([d_log_mtt, d_log_ptt, d_ytt], axis=1).astype(np.float32))
+        lkrs.append(np.stack([mtt_lkr[ok], pttt_lkr[ok], ytt_lkr[ok]], axis=1).astype(np.float32))
+        entries = np.nonzero(ok)[0]                      # ROOT-entry кожної відібраної події
+        origins.append(np.stack([np.full(len(entries), channel), entries], axis=1))
+        print(f"    відібрано {int(ok.sum())} / {len(feats)} подій")
 
-    pttt  = np.sqrt(tt_px**2 + tt_py**2)
-    ep, em = tt_e + tt_pz, tt_e - tt_pz
-    ytt = 0.5 * np.log(ep / em) if (ep > 0 and em > 0) else 0.0
-
-    d_log_mtt  = np.log(mtt) - lkr_vars[0]
-    d_log_pttt = np.log(pttt + 1.0) - lkr_vars[1]
-    d_ytt      = ytt - lkr_vars[2]
-
-    return np.array([d_log_mtt, d_log_pttt, d_ytt], dtype=np.float32)
-
-def process_single_batch(args):
-    filename, treename, start, stop = args
-    import uproot
-    import awkward as ak
-    import numpy as np
-    
-    MASS_MU, MASS_EL = 0.105658, 0.000511
-    def calc_e(pt, eta, mass): return np.sqrt(pt**2 + (pt*np.sinh(eta))**2 + mass**2)
-
-    branches = ["Nmu", "Nel", "Njet", "muPt", "muEta", "muPhi", "elPt", "elEta", "elPhi", "jetPt", "jetEta", "jetPhi", "jetMass", "metPx", "metPy", "mcT", "mcTbar"]
-
-    with uproot.open(f"{filename}:{treename}") as tree:
-        batch_data = tree.arrays(branches, entry_start=start, entry_stop=stop, library="ak")
-
-    N_batch = len(batch_data["metPx"])
-    inputs, targets, lkr_list = [], [], []
-    skipped = 0
-
-    Nmu, Nel, Njet = np.array(batch_data["Nmu"]).astype(int), np.array(batch_data["Nel"]).astype(int), np.array(batch_data["Njet"]).astype(int)
-    met_px, met_py = np.array(batch_data["metPx"]).astype(np.float32), np.array(batch_data["metPy"]).astype(np.float32)
-
-    for i in range(N_batch):
-        t_arr_list, tb_arr_list = batch_data["mcT"][i].to_list(), batch_data["mcTbar"][i].to_list()
-        if len(t_arr_list) < 4 or len(tb_arr_list) < 4: skipped += 1; continue
-            
-        t_arr, tb_arr = np.array(t_arr_list, dtype=np.float64), np.array(tb_arr_list, dtype=np.float64)
-        t_px, t_py, t_pz, t_m = t_arr[0], t_arr[1], t_arr[2], t_arr[3]
-        tb_px, tb_py, tb_pz, tb_m = tb_arr[0], tb_arr[1], tb_arr[2], tb_arr[3]
-        t_e  = np.sqrt(t_px**2  + t_py**2  + t_pz**2  + t_m**2)
-        tb_e = np.sqrt(tb_px**2 + tb_py**2 + tb_pz**2 + tb_m**2)
-
-        if Nmu[i] < 1 or Nel[i] < 1 or Njet[i] < 2: skipped += 1; continue
-
-        mu_pt_val, mu_eta_val, mu_phi_val = float(batch_data["muPt"][i][0]), float(batch_data["muEta"][i][0]), float(batch_data["muPhi"][i][0])
-        el_pt_val, el_eta_val, el_phi_val = float(batch_data["elPt"][i][0]), float(batch_data["elEta"][i][0]), float(batch_data["elPhi"][i][0])
-        
-        lM = {"pt": mu_pt_val, "eta": mu_eta_val, "phi": mu_phi_val, "e": calc_e(mu_pt_val, mu_eta_val, MASS_MU)}
-        lP = {"pt": el_pt_val, "eta": el_eta_val, "phi": el_phi_val, "e": calc_e(el_pt_val, el_eta_val, MASS_EL)}
-
-        jets, jmasses = [], []
-        for j in range(Njet[i]):
-            jpt, jeta, jphi, jm = float(batch_data["jetPt"][i][j]), float(batch_data["jetEta"][i][j]), float(batch_data["jetPhi"][i][j]), float(batch_data["jetMass"][i][j])
-            jets.append({"pt": jpt, "eta": jeta, "phi": jphi, "e": calc_e(jpt, jeta, abs(jm))})
-            jmasses.append(jm)
-
-        jb1, jb2 = select_best_jets_event(lM, lP, jets, jmasses)
-        if jb1 is None: skipped += 1; continue
-        def cart(v): return [v["e"], v["pt"]*np.cos(v["phi"]), v["pt"]*np.sin(v["phi"]), v["pt"]*np.sinh(v["eta"])]
-
-        m_lpj1 = invariant_mass_2body(lP["pt"],lP["eta"],lP["phi"],lP["e"], jb1["pt"],jb1["eta"],jb1["phi"],jb1["e"])
-        m_lmj2 = invariant_mass_2body(lM["pt"],lM["eta"],lM["phi"],lM["e"], jb2["pt"],jb2["eta"],jb2["phi"],jb2["e"])
-        ht = lM["pt"] + lP["pt"] + jb1["pt"] + jb2["pt"] + np.sqrt(met_px[i]**2 + met_py[i]**2)
-
-        llbar_px, llbar_py, llbar_pz, llbar_e = lM["pt"]*np.cos(lM["phi"]) + lP["pt"]*np.cos(lP["phi"]), lM["pt"]*np.sin(lM["phi"]) + lP["pt"]*np.sin(lP["phi"]), lM["pt"]*np.sinh(lM["eta"]) + lP["pt"]*np.sinh(lP["eta"]), lM["e"] + lP["e"]
-        llbar_m  = np.sqrt(max(llbar_e**2 - llbar_px**2 - llbar_py**2 - llbar_pz**2, 0.0))
-        ep, em = llbar_e + llbar_pz, llbar_e - llbar_pz
-        llbar_rap = 0.5*np.log(ep/em) if (ep > 0 and em > 0) else 0.0
-
-        met_pt_val  = np.sqrt(float(met_px[i])**2 + float(met_py[i])**2)
-        mt_nunu     = np.sqrt(llbar_m**2 + met_pt_val**2)
-        pz_nunu_lkr = mt_nunu * np.sinh(llbar_rap)
-        e_nunu_lkr  = mt_nunu * np.cosh(llbar_rap)
-
-        llnn_px, llnn_py, llnn_pz, llnn_e = llbar_px + float(met_px[i]), llbar_py + float(met_py[i]), llbar_pz + pz_nunu_lkr, llbar_e  + e_nunu_lkr
-        llnn_m  = np.sqrt(max(llnn_e**2 - llnn_px**2 - llnn_py**2 - llnn_pz**2, 0.0))
-
-        mw = 80.4
-        if llnn_m < 2.0 * mw:
-            llnn_pt2 = llnn_px**2 + llnn_py**2
-            llnn_rap_val = 0.5*np.log((llnn_e+llnn_pz)/(llnn_e-llnn_pz+1e-10)) if (llnn_e+llnn_pz > 0 and llnn_e-llnn_pz > 0) else 0.0
-            llnn_e_corr  = np.sqrt(4*mw*mw + llnn_pt2) * np.cosh(llnn_rap_val)
-            llnn_pz_corr = llnn_e_corr * np.tanh(llnn_rap_val)
-        else: llnn_e_corr, llnn_pz_corr  = llnn_e, llnn_pz
-
-        def j_cart(v): return (v["pt"]*np.cos(v["phi"]), v["pt"]*np.sin(v["phi"]), v["pt"]*np.sinh(v["eta"]), v["e"])
-        b1, b2 = j_cart(jb1), j_cart(jb2)
-        tt_px_lkr, tt_py_lkr, tt_pz_lkr, tt_e_lkr = llnn_px + b1[0] + b2[0], llnn_py + b1[1] + b2[1], llnn_pz_corr + b1[2] + b2[2], llnn_e_corr  + b1[3] + b2[3]
-
-        mtt_lkr   = np.sqrt(max(tt_e_lkr**2 - tt_px_lkr**2 - tt_py_lkr**2 - tt_pz_lkr**2, 0.0))
-        pttt_lkr  = np.sqrt(tt_px_lkr**2 + tt_py_lkr**2)
-        phitt_lkr = np.arctan2(tt_py_lkr, tt_px_lkr)
-        ep_lkr, em_lkr = tt_e_lkr + tt_pz_lkr, tt_e_lkr - tt_pz_lkr
-        ytt_lkr   = 0.5*np.log(ep_lkr/em_lkr) if (ep_lkr > 0 and em_lkr > 0) else 0.0
-
-        if mtt_lkr < 300.0: skipped += 1; continue
-
-        lkr_vars = np.array([np.log(mtt_lkr), np.log(pttt_lkr + 1.0), ytt_lkr, np.sin(phitt_lkr), np.cos(phitt_lkr)], dtype=np.float32)
-        tgt = ttbar_vars(t_e, t_px, t_py, t_pz, tb_e, tb_px, tb_py, tb_pz, lkr_vars)
-        if not np.all(np.isfinite(tgt)): skipped += 1; continue
-
-        # РІВНО 26 ОЗНАК
-        feat = np.array(cart(lM) + cart(lP) + cart(jb1) + cart(jb2) +
-                [float(met_px[i]), float(met_py[i]), m_lpj1, m_lmj2, ht,
-                 llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m], dtype=np.float32)
-
-        if not np.all(np.isfinite(feat)): skipped += 1; continue
-        inputs.append(feat); targets.append(tgt); lkr_list.append(np.array([mtt_lkr, pttt_lkr, ytt_lkr, phitt_lkr], dtype=np.float32))
-
-    return inputs, targets, lkr_list, skipped
-
-def load_and_prepare(filename, treename="tree"):
-    print(f"[I] Відкриваємо {filename}:{treename}")
-    with uproot.open(f"{filename}:{treename}") as tree: total_events = tree.num_entries
-    
-    step_size = 50000
-    ranges = [(filename, treename, i, min(i + step_size, total_events)) for i in range(0, total_events, step_size)]
-
-    all_inputs, all_targets, all_lkr, total_skipped = [], [], [], 0
-    max_workers = min(6, os.cpu_count() or 1)
-
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
-        for idx, (inputs, targets, lkr_list, skipped) in enumerate(executor.map(process_single_batch, ranges)):
-            all_inputs.extend(inputs); all_targets.extend(targets); all_lkr.extend(lkr_list); total_skipped += skipped
-            print(f"[I] Батч {idx+1}/{len(ranges)} оброблено.")
-
-    X, y, lkr = np.stack(all_inputs, axis=0), np.stack(all_targets, axis=0), np.stack(all_lkr, axis=0)
-    print(f"\n[I] Готово для тренування: {len(X)} подій")
-    return X, y, lkr
+    X = np.concatenate(Xs); y = np.concatenate(ys); lkr = np.concatenate(lkrs)
+    origin = np.concatenate(origins)                     # (N, 2): канал, entry
+    good = np.all(np.isfinite(y), axis=1)                # прибрати нефінітні цілі
+    X, y, lkr, origin = X[good], y[good], lkr[good], origin[good]
+    print(f"\n[I] Готово для тренування: {len(X)} подій ({level}-рівень, усі канали)")
+    return X, y, lkr, origin
 
 class SolveDataset(Dataset):
     def __init__(self, X, y, norm=None):
@@ -266,25 +143,64 @@ class WeightedL1Loss(nn.Module):
 # ---------------------------------------
 
 class EarlyStopping:
-    def __init__(self, patience=PATIENCE):
-        self.patience, self.best_loss, self.counter, self.best_state = patience, float("inf"), 0, None
+    # min_delta — ВІДНОСНИЙ поріг значущого покращення (0.1%): лічильник patience
+    # скидається лише коли val_loss падає більш ніж на min_delta від best (щоб мікро-
+    # покращення ~1e-6 не тримали тренування нескінченно). Найкращий стан зберігається
+    # на БУДЬ-якому покращенні.
+    def __init__(self, patience=PATIENCE, min_delta=1e-3, save_path=None):
+        self.patience, self.min_delta, self.save_path = patience, min_delta, save_path
+        self.best_loss, self.counter, self.best_state = float("inf"), 0, None
+    @staticmethod
+    def _clean(state):
+        # прибрати префікс torch.compile (_orig_mod.), щоб ваги були придатні для inference
+        if any(k.startswith("_orig_mod.") for k in state):
+            return {k.replace("_orig_mod.", ""): v for k, v in state.items()}
+        return state
     def __call__(self, val_loss, model):
-        if val_loss < self.best_loss - 1e-6:
-            self.best_loss, self.counter, self.best_state = val_loss, 0, {k: v.clone() for k, v in model.state_dict().items()}
-        else: self.counter += 1
+        if val_loss < self.best_loss * (1.0 - self.min_delta):
+            self.counter = 0          # значуще покращення -> скидаємо
+        else:
+            self.counter += 1
+        if val_loss < self.best_loss:  # будь-яке покращення -> оновлюємо найкращий стан
+            self.best_loss = val_loss
+            self.best_state = {k: v.clone() for k, v in model.state_dict().items()}
+            if self.save_path:        # ...і одразу пишемо на диск (Ctrl+C не втратить прогрес)
+                torch.save(self._clean(self.best_state), self.save_path)
         return self.counter >= self.patience
+
+def save_trained_root(path, origin, idx_trained, level):
+    """Зберігає у ROOT перелік подій, що БРАЛИ УЧАСТЬ у навчанні NN (train+val).
+    Дерево 'nn_trained' з гілками: channel, entry (позиція події у ttbarTree відповідного
+    ttbar_output_full_<channel>.root) та level ('det'/'gen').
+    Події, яких тут НЕМА, вважаються придатними для незалежної оцінки мережі."""
+    ch = origin[idx_trained, 0].astype(np.int32)
+    en = origin[idx_trained, 1].astype(np.int64)
+    order = np.lexsort((en, ch))          # впорядкувати за (канал, entry) для зручності
+    with uproot.recreate(path) as f:
+        f["nn_trained"] = {"channel": ch[order], "entry": en[order]}
+    per_ch = {int(c): int((ch == c).sum()) for c in np.unique(ch)}
+    print(f"[I] Позначено {len(ch)} тренувальних подій ({level}) -> {path}")
+    print(f"    по каналах: {per_ch}")
+
 
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[I] Використовуємо пристрій: {device}")
     
     os.makedirs(args.outdir, exist_ok=True)
-    X, y, lkr = load_and_prepare(args.input, args.tree)
+    X, y, lkr, origin = load_and_prepare(args.inputs, args.tree, args.level)
 
     N = len(X)
     idx = np.random.RandomState(SEED).permutation(N)
     n_tr, n_val = int(0.70*N), int(0.15*N)
     idx_tr, idx_val, idx_te = idx[:n_tr], idx[n_tr:n_tr+n_val], idx[n_tr+n_val:]
+
+    # Позначаємо у ROOT саме ті події, що БРАЛИ УЧАСТЬ у навчанні (train + val).
+    # Логіка "позначаємо тренувальні": подія без мітки за замовчуванням придатна для
+    # оцінки, тож нова/непозначена подія ніколи не буде помилково зарахована як тестова.
+    # Алгоритмічних реконструкцій (LKR/LKRv3/FKR) це не стосується — вони на всьому датасеті.
+    save_trained_root(os.path.join(args.outdir, "nn_trained.root"), origin,
+                      np.concatenate([idx_tr, idx_val]), args.level)
 
     # Більше не передаємо augment=True, бо ми робимо це на GPU
     ds_tr = SolveDataset(X[idx_tr], y[idx_tr])
@@ -307,7 +223,7 @@ def train(args):
     except Exception as e:
         print("[W] Ваша версія або система не підтримує torch.compile. Тренування продовжиться без нього.")
 
-    stopper = EarlyStopping(PATIENCE)
+    stopper = EarlyStopping(PATIENCE, save_path=os.path.join(args.outdir, "solve_nn_best.pt"))
     
     # --- ВИКОРИСТАННЯ WEIGHTED L1 LOSS ---
     # Вага 5.0 для маси, 1.0 для pT і y (маса в 5 разів важливіша)
@@ -361,19 +277,24 @@ def train(args):
             print(f"-> Зупинка на епосі {ep} (Patience: {PATIENCE})")
             break
 
-    # Якщо torch.compile був увімкнений, треба дістати "чисті" ваги з _orig_mod
-    clean_state_dict = stopper.best_state
-    if any(k.startswith('_orig_mod.') for k in clean_state_dict.keys()):
-        clean_state_dict = {k.replace('_orig_mod.', ''): v for k, v in clean_state_dict.items()}
-
+    # best-модель уже збережена stopper'ом на кожному покращенні; фінально гарантуємо запис
+    clean_state_dict = EarlyStopping._clean(stopper.best_state)
     model.load_state_dict(clean_state_dict, strict=False)
     torch.save(clean_state_dict, os.path.join(args.outdir, "solve_nn_best.pt"))
-    print("\n[I] Тренування успішно завершено!")
+    print(f"\n[I] Тренування завершено. Best val loss: {stopper.best_loss:.6f}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input",  default="mc_signal_merged.root")
-    parser.add_argument("--tree",   default="tree")
+    parser.add_argument("--inputs", nargs="+",
+                        default=["ttbar_output_full_1.root", "ttbar_output_full_2.root", "ttbar_output_full_3.root"],
+                        help="вихідні файли eventReco (усі канали за замовчуванням)")
+    parser.add_argument("--tree",   default="ttbarTree")
+    parser.add_argument("--level",  choices=["det", "gen"], default="det",
+                        help="det -> детекторні ознаки (reco_passed_selection==1); gen -> генераторні")
     parser.add_argument("--epochs", type=int, default=EPOCHS)
-    parser.add_argument("--outdir", default="solve_nn_output")
-    train(parser.parse_args())
+    parser.add_argument("--outdir", default=None,
+                        help="каталог виходу (за замовч. solve_nn_output, або solve_nn_gen_output для --level gen)")
+    args = parser.parse_args()
+    if args.outdir is None:
+        args.outdir = "solve_nn_gen_output" if args.level == "gen" else "solve_nn_output"
+    train(args)

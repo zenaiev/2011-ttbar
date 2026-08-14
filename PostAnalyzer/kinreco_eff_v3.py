@@ -10,7 +10,7 @@ tree = uproot.open(filename)["ttbarTree"]
 
 # Визначення масивів для зчитування
 #kinrecos = ['lkrv2']
-kinrecos = ['lkr','lkrv3','lkrnn']
+kinrecos = ['lkr','lkrv3']
 variables = ['mtt', 'pttt', 'ytt', 'phitt','dphitt']
 arrays = tree.arrays(
     [f"{v}_{k}" for v in variables for k in kinrecos] + [f"{v}_gen" for v in variables],
@@ -190,8 +190,7 @@ for variable in variables:
         with np.errstate(divide='ignore', invalid='ignore'):
             ratio = res_current / res_lkr
             
-        color = 'red' if k == 'lkrnn' else None
-        axs_ratio[i, j].plot(bin_centers, ratio, 'o-', label=f"{k.upper()}/LKR", markersize=4, color=color)
+        axs_ratio[i, j].plot(bin_centers, ratio, 'o-', label=f"{k.upper()}/LKR", markersize=4)
 
     axs_ratio[i, j].axhline(1.0, color='black', linestyle='--', alpha=0.5)
     axs_ratio[i, j].set_xlabel(labels[variable])

@@ -1,7 +1,27 @@
 #include "LKRnn.h"
-#include "nn_weights.h"
+#include "nn_weights.h"      // namespace NNWeights      (детекторна модель)
+#include "nn_weights_gen.h"  // namespace NNWeights_gen  (генераторна модель)
 #include <cmath>
 #include <vector>
+
+// заповнити NNParams вказівниками на ваги заданого namespace
+#define FILL_NNPARAMS(P, NS) do {                                             \
+    P.ip0w = &NS::input_proj_0_weight; P.ip0b = &NS::input_proj_0_bias;       \
+    P.ip1w = &NS::input_proj_1_weight; P.ip1b = &NS::input_proj_1_bias;       \
+    P.b0_0w = &NS::blocks_0_net_0_weight; P.b0_0b = &NS::blocks_0_net_0_bias; \
+    P.b0_1w = &NS::blocks_0_net_1_weight; P.b0_1b = &NS::blocks_0_net_1_bias; \
+    P.b0_3w = &NS::blocks_0_net_3_weight; P.b0_3b = &NS::blocks_0_net_3_bias; \
+    P.b0_4w = &NS::blocks_0_net_4_weight; P.b0_4b = &NS::blocks_0_net_4_bias; \
+    P.b1_0w = &NS::blocks_1_net_0_weight; P.b1_0b = &NS::blocks_1_net_0_bias; \
+    P.b1_1w = &NS::blocks_1_net_1_weight; P.b1_1b = &NS::blocks_1_net_1_bias; \
+    P.b1_3w = &NS::blocks_1_net_3_weight; P.b1_3b = &NS::blocks_1_net_3_bias; \
+    P.b1_4w = &NS::blocks_1_net_4_weight; P.b1_4b = &NS::blocks_1_net_4_bias; \
+    P.b2_0w = &NS::blocks_2_net_0_weight; P.b2_0b = &NS::blocks_2_net_0_bias; \
+    P.b2_1w = &NS::blocks_2_net_1_weight; P.b2_1b = &NS::blocks_2_net_1_bias; \
+    P.b2_3w = &NS::blocks_2_net_3_weight; P.b2_3b = &NS::blocks_2_net_3_bias; \
+    P.b2_4w = &NS::blocks_2_net_4_weight; P.b2_4b = &NS::blocks_2_net_4_bias; \
+    P.hw = &NS::head_weight; P.hb = &NS::head_bias;                           \
+} while(0)
 
 static std::vector<float> linear_layer(
     const std::vector<float>& in, const std::vector<float>& w, const std::vector<float>& b)
@@ -53,9 +73,16 @@ static std::vector<float> res_block(
     return h;
 }
 
-LKRnn::LKRnn() : LKRv3("lkrnn") {
-    x_mean = NNWeights::x_mean;
-    x_std  = NNWeights::x_std;
+LKRnn::LKRnn(bool useGen) : LKRv3("lkrnn") {
+    if (useGen) {
+        x_mean = NNWeights_gen::x_mean;
+        x_std  = NNWeights_gen::x_std;
+        FILL_NNPARAMS(_p, NNWeights_gen);
+    } else {
+        x_mean = NNWeights::x_mean;
+        x_std  = NNWeights::x_std;
+        FILL_NNPARAMS(_p, NNWeights);
+    }
 }
 
 std::vector<TLorentzVector> LKRnn::reconstruct(
@@ -70,90 +97,35 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
     if (!selectBestJets(vecLepM, vecLepP, vecJets, jetBTagDiscr, bTagDiscrL, j1, j2))
         return solution;
 
-    // ── 1. Скалярні змінні першої групи ───────────────────────────
-    float m_lpj1 = (vecLepP + j1).M();
-    float m_lmj2 = (vecLepM + j2).M();
-    float ht = vecLepM.Pt() + vecLepP.Pt() + j1.Pt() + j2.Pt()
-               + std::sqrt(metPx*metPx + metPy*metPy);
+    // ── Вхід мережі: 26 ознак (ЄДИНА реалізація — LKRv3::computeFeatures) ──────
+    std::vector<float> x = computeFeatures(vecLepM, vecLepP, j1, j2, metPx, metPy);
 
-    // ── 2. Нові змінні: LKRv3-подібні фізичні constraints ────────────────────
-    TLorentzVector llbar = vecLepM + vecLepP;
-    float llbar_m   = llbar.M();
-    float llbar_e   = llbar.E();
-    float llbar_pz  = llbar.Pz();
-
-    float ep = llbar_e + llbar_pz;
-    float em = llbar_e - llbar_pz;
-    float llbar_rap = (ep > 0.f && em > 0.f) ? 0.5f * std::log(ep / em) : 0.f;
-
-    float met_pt  = std::sqrt(metPx*metPx + metPy*metPy);
-    float mt_nunu = std::sqrt(llbar_m*llbar_m + met_pt*met_pt);
-    float pz_nunu_lkr = mt_nunu * std::sinh(llbar_rap);
-    float e_nunu_lkr  = mt_nunu * std::cosh(llbar_rap);
-
-    float llnn_px = llbar.Px() + metPx;
-    float llnn_py = llbar.Py() + metPy;
-    float llnn_pz = llbar_pz   + pz_nunu_lkr;
-    float llnn_e  = llbar_e    + e_nunu_lkr;
-    float llnn_m2 = llnn_e*llnn_e - llnn_px*llnn_px - llnn_py*llnn_py - llnn_pz*llnn_pz;
-    float llnn_m  = llnn_m2 > 0.f ? std::sqrt(llnn_m2) : 0.f;
-
-    const float mw = 80.4f;
-    float llnn_e_corr  = llnn_e;
-    float llnn_pz_corr = llnn_pz;
-    if (llnn_m < 2.0f * mw) {
-        float llnn_pt2 = llnn_px*llnn_px + llnn_py*llnn_py;
-        float ep2 = llnn_e + llnn_pz;
-        float em2 = llnn_e - llnn_pz;
-        float llnn_rap = (ep2 > 0.f && em2 > 0.f) ? 0.5f * std::log(ep2 / em2) : 0.f;
-        llnn_e_corr  = std::sqrt(4.f*mw*mw + llnn_pt2) * std::cosh(llnn_rap);
-        llnn_pz_corr = llnn_e_corr * std::tanh(llnn_rap);
-    }
-
-    float tt_px_lkr = llnn_px      + j1.Px() + j2.Px();
-    float tt_py_lkr = llnn_py      + j1.Py() + j2.Py();
-    float tt_pz_lkr = llnn_pz_corr + j1.Pz() + j2.Pz();
-    float tt_e_lkr  = llnn_e_corr  + j1.E()  + j2.E();
-    float tt_m2_lkr = tt_e_lkr*tt_e_lkr - tt_px_lkr*tt_px_lkr - tt_py_lkr*tt_py_lkr - tt_pz_lkr*tt_pz_lkr;
-
-    float mtt_lkrv3_val = tt_m2_lkr > 0.f ? std::sqrt(tt_m2_lkr) : 300.f;
-    float pttt_lkr      = std::sqrt(tt_px_lkr*tt_px_lkr + tt_py_lkr*tt_py_lkr);
-    float phitt_lkr     = std::atan2(tt_py_lkr, tt_px_lkr);
-    float ep_lkr        = tt_e_lkr + tt_pz_lkr;
-    float em_lkr        = tt_e_lkr - tt_pz_lkr;
-    float ytt_lkr       = (ep_lkr > 0.f && em_lkr > 0.f) ? 0.5f * std::log(ep_lkr / em_lkr) : 0.f;
-
-    float log_mtt_lkrv3   = std::log(std::max(mtt_lkrv3_val, 300.f));
-    float log_pttt_lkrv3  = std::log(pttt_lkr + 1.0f);
-    float sin_phitt_lkrv3 = std::sin(phitt_lkr);
-    float cos_phitt_lkrv3 = std::cos(phitt_lkr);
-    
-    // ── 3. Вхідний вектор (РІВНО 26 ОЗНАК) ───────────
-    std::vector<float> x = {
-        (float)vecLepM.E(),  (float)vecLepM.Px(), (float)vecLepM.Py(), (float)vecLepM.Pz(),
-        (float)vecLepP.E(),  (float)vecLepP.Px(), (float)vecLepP.Py(), (float)vecLepP.Pz(),
-        (float)j1.E(),  (float)j1.Px(), (float)j1.Py(), (float)j1.Pz(),
-        (float)j2.E(),  (float)j2.Px(), (float)j2.Py(), (float)j2.Pz(),
-        metPx, metPy,
-        m_lpj1, m_lmj2, ht,
-        llbar_m, llbar_rap, mt_nunu, pz_nunu_lkr, llnn_m
-    }; // ЗАКІНЧУЄТЬСЯ НА llnn_m!
+    // ── База LKRv3, яку мережа коригує (той самий solve, що й у LKRv3) ─────────
+    TLorentzVector ttbar_lkrv3 = solve(vecLepM, vecLepP, j1, j2, metPx, metPy);
+    float mtt_lkrv3_val = ttbar_lkrv3.M();
+    float pttt_lkr      = ttbar_lkrv3.Pt();
+    float phitt_lkr     = ttbar_lkrv3.Phi();
+    // рапідність із захистом (TLorentzVector::Rapidity() дає inf/nan при E-Pz<=0)
+    float ep_lkr = ttbar_lkrv3.E() + ttbar_lkrv3.Pz();
+    float em_lkr = ttbar_lkrv3.E() - ttbar_lkrv3.Pz();
+    float ytt_lkr = (ep_lkr > 0.f && em_lkr > 0.f) ? 0.5f * std::log(ep_lkr / em_lkr) : 0.f;
+    float log_mtt_lkrv3  = std::log(std::max(mtt_lkrv3_val, 300.f));
+    float log_pttt_lkrv3 = std::log(pttt_lkr + 1.0f);
 
     // ── 4. Нормалізація входу ─────────────────────────────────────────────────
     for (size_t i = 0; i < x.size(); ++i)
         x[i] = (x[i] - x_mean[i]) / (x_std[i] + 1e-8f);
 
-    // ── 5. Інференс (3 БЛОКИ) ───────────────────────────
-    using namespace NNWeights;
-    auto h = linear_layer(x, input_proj_0_weight, input_proj_0_bias);
-    h = layer_norm(h, input_proj_1_weight, input_proj_1_bias);
+    // ── 5. Інференс (3 БЛОКИ) з ваг обраної моделі (_p) ───────────────────────
+    auto h = linear_layer(x, *_p.ip0w, *_p.ip0b);
+    h = layer_norm(h, *_p.ip1w, *_p.ip1b);
     silu_inplace(h);
 
-    h = res_block(h, blocks_0_net_0_weight, blocks_0_net_0_bias, blocks_0_net_1_weight, blocks_0_net_1_bias, blocks_0_net_3_weight, blocks_0_net_3_bias, blocks_0_net_4_weight, blocks_0_net_4_bias);
-    h = res_block(h, blocks_1_net_0_weight, blocks_1_net_0_bias, blocks_1_net_1_weight, blocks_1_net_1_bias, blocks_1_net_3_weight, blocks_1_net_3_bias, blocks_1_net_4_weight, blocks_1_net_4_bias);
-    h = res_block(h, blocks_2_net_0_weight, blocks_2_net_0_bias, blocks_2_net_1_weight, blocks_2_net_1_bias, blocks_2_net_3_weight, blocks_2_net_3_bias, blocks_2_net_4_weight, blocks_2_net_4_bias);
+    h = res_block(h, *_p.b0_0w, *_p.b0_0b, *_p.b0_1w, *_p.b0_1b, *_p.b0_3w, *_p.b0_3b, *_p.b0_4w, *_p.b0_4b);
+    h = res_block(h, *_p.b1_0w, *_p.b1_0b, *_p.b1_1w, *_p.b1_1b, *_p.b1_3w, *_p.b1_3b, *_p.b1_4w, *_p.b1_4b);
+    h = res_block(h, *_p.b2_0w, *_p.b2_0b, *_p.b2_1w, *_p.b2_1b, *_p.b2_3w, *_p.b2_3b, *_p.b2_4w, *_p.b2_4b);
 
-    auto out = linear_layer(h, head_weight, head_bias);
+    auto out = linear_layer(h, *_p.hw, *_p.hb);
 
     // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
     // Мережа математично не здатна зламати масу LKRv3 більше ніж на ~30%!

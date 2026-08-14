@@ -151,8 +151,15 @@ def print_level(a, level, methods, n_total):
     print(f"{level.upper()} рівень ({'reco_passed_selection==1' if level == 'det' else 'усі події'}), "
           f"знаменник ефективності N = {n_denom}")
     print(sep)
-    print(f"{'Змінна':<8} | {'Метод':<7} | {'Еф. (%)':<10} | {'Bias':<10} | {'Resolution':<12} | {'vs LKR':<10}")
+    print(f"{'Змінна':<8} | {'Метод':<7} | {'Еф. (%)':<10} | {'Bias':<10} | {'Resolution':<12} | "
+          f"{'vs LKR':<10} | {'vs LKRv3':<10}")
     print(sep)
+
+    def improvement(base, val):
+        """Покращення roзд. здатності відносно базового методу, у %."""
+        if base is None or np.isnan(base) or base <= 0 or np.isnan(val):
+            return f"{'---':<10}"
+        return f"{100 * (base - val) / base:+.2f}%"
 
     for variable in VARS:
         gen_arr = a[f"{variable}_gen"]
@@ -167,22 +174,20 @@ def print_level(a, level, methods, n_total):
             bias, res, n_ok = calc_metrics(reco_arr, gen_arr, valid, variable)
             res_by_method[m] = res
             counts.append((variable, m, n_ok))
-            print(f"{variable:<8} | {m.upper():<7} | {eff:<10.2f} | {bias:<10.4f} | {res:<12.4f}", end="")
-            if m != "lkr" and "lkr" in res_by_method and not np.isnan(res_by_method["lkr"]) and res_by_method["lkr"] > 0 and not np.isnan(res):
-                imp = 100 * (res_by_method["lkr"] - res) / res_by_method["lkr"]
-                print(f" | {imp:+.2f}%")
-            else:
-                print(f" | {'---':<10}")
+            vs_lkr   = improvement(res_by_method.get("lkr"), res)   if m != "lkr"   else f"{'---':<10}"
+            vs_lkrv3 = improvement(res_by_method.get("lkrv3"), res) if m != "lkrv3" else f"{'---':<10}"
+            if m == "lkr":            # для базового LKR колонка vs LKRv3 не має сенсу
+                vs_lkrv3 = f"{'---':<10}"
+            print(f"{variable:<8} | {m.upper():<7} | {eff:<10.2f} | {bias:<10.4f} | {res:<12.4f} | "
+                  f"{vs_lkr:<10} | {vs_lkrv3:<10}")
         print("-" * 122)
     return {"level": level, "n_den": n_denom, "counts": counts}
 
 
-def calculate_integral_metrics(filename, methods=None):
+def read_arrays(filename, methods=None):
+    """Читає потрібні гілки з файлу; повертає (масиви, список методів)."""
     tree = uproot.open(filename)["ttbarTree"]
     methods = methods or detect_methods(tree)
-    if "lkr" not in methods:
-        print("[Попередження] LKR відсутній у файлі — колонка 'vs LKR' буде порожня")
-
     keys = ["reco_passed_selection"]
     for v in VARS:
         keys.append(f"{v}_gen")
@@ -190,18 +195,38 @@ def calculate_integral_metrics(filename, methods=None):
             keys += [f"{v}_{m}", f"{v}_{m}_gen"]
     for m in methods:
         keys += [m, f"{m}_gen"]
-    a = tree.arrays(keys, library="np")
+    keys = [k for k in dict.fromkeys(keys) if k in tree.keys()]
+    return tree.arrays(keys, library="np"), methods
+
+
+def combine_arrays(arrays_list):
+    """Зшиває масиви кількох каналів в один набір (сумарна статистика)."""
+    common = set(arrays_list[0])
+    for a in arrays_list[1:]:
+        common &= set(a)
+    return {k: np.concatenate([a[k] for a in arrays_list]) for k in common}
+
+
+def calculate_integral_metrics(filename, methods=None, a=None, label=None, binned=True):
+    """Друкує інтегральні (і за потреби per-bin) метрики. Можна передати вже
+    завантажені масиви `a` (напр. об'єднані по каналах) замість читання файлу."""
+    if a is None:
+        a, methods = read_arrays(filename, methods)
+    methods = methods or [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in a]
+    if "lkr" not in methods:
+        print("[Попередження] LKR відсутній — колонка 'vs LKR' буде порожня")
 
     n_total = len(a["mtt_gen"])
-    print(f"[I] {filename}: {n_total} подій, методи: {', '.join(m.upper() for m in methods)}")
+    print(f"[I] {label or filename}: {n_total} подій, методи: {', '.join(m.upper() for m in methods)}")
 
     # 1) інтегральні величини по всьому діапазону (лише детекторний рівень)
     print(f"\n{'*' * 60}\n*  ІНТЕГРАЛЬНІ (весь діапазон)\n{'*' * 60}")
     stats = [print_level(a, "det", methods, n_total)]
 
     # 2) окремий per-bin вивід (роздільна здатність та ефективність по бінах)
-    print(f"\n{'*' * 60}\n*  ПО БІНАХ\n{'*' * 60}")
-    print_binned_level(a, "det", methods)
+    if binned:
+        print(f"\n{'*' * 60}\n*  ПО БІНАХ\n{'*' * 60}")
+        print_binned_level(a, "det", methods)
 
     return stats
 
@@ -253,7 +278,7 @@ if __name__ == "__main__":
                     help="канали: 1=ee, 2=mumu, 3=emu (за замовчуванням усі три)")
     args = ap.parse_args()
 
-    all_stats = []
+    all_stats, loaded, chan_names = [], [], []
     if args.file:
         all_stats.append((os.path.basename(args.file), calculate_integral_metrics(args.file)))
     else:
@@ -264,9 +289,19 @@ if __name__ == "__main__":
                 continue
             print(f"\n{'#' * 122}\n# КАНАЛ {ch} ({CHANNEL_NAMES.get(ch, '?')})\n{'#' * 122}")
             label = f"c{ch} ({CHANNEL_NAMES.get(ch, '?')})"
-            all_stats.append((label, calculate_integral_metrics(fname)))
+            a, methods = read_arrays(fname)
+            all_stats.append((label, calculate_integral_metrics(fname, methods, a=a, label=label)))
+            loaded.append(a)
+            chan_names.append(CHANNEL_NAMES.get(ch, str(ch)))
         if not all_stats:
             print("[E] Жодного вхідного файлу не знайдено.")
+
+        # СУМАРНО по всіх каналах: зшиваємо події й рахуємо ті самі метрики разом
+        if len(loaded) > 1:
+            chs = "+".join(chan_names)
+            print(f"\n{'#' * 122}\n# СУМАРНО ПО КАНАЛАХ ({chs})\n{'#' * 122}")
+            calculate_integral_metrics(None, a=combine_arrays(loaded),
+                                       label=f"сумарно {chs}", binned=False)
 
     if all_stats:
         print_counts(all_stats)

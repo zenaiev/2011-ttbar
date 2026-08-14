@@ -19,7 +19,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import uproot
 
-METHODS = ["lkr", "lkrv3"]
+METHODS = ["lkr", "lkrv3", "lkrnn"]
 VARS = ["mtt", "pttt", "ytt"]
 CHANNEL_NAMES = {1: "ee", 2: "mumu", 3: "emu"}
 # верхня межа реконструйованого значення — як у kinreco_eff_v3.py (reco < 9999),
@@ -41,7 +41,7 @@ BINS = {
                             np.logspace(np.log10(250), np.log10(800), 8))),
     "ytt": np.array([-2.4, -2.0, -1.75] + np.linspace(-1.6, 1.6, 16, endpoint=False).tolist() + [1.75, 2.0, 2.4]),
 }
-COLORS = {"lkr": "tab:blue", "lkrv3": "tab:orange"}
+COLORS = {"lkr": "tab:blue", "lkrv3": "tab:orange", "lkrnn": "tab:green"}
 
 
 def physical(reco, variable):
@@ -53,11 +53,14 @@ def physical(reco, variable):
     return m
 
 
-def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable):
+def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable, res_mask=None):
     """Ефективність, bias, roздільна здатність у кожному біні gen.
     valid      — чисельник ефективності (base_valid & прапорець методу);
     denom_mask — знаменник ефективності: det -> reco_passed_selection==1, gen -> усі події.
-    Ефективність КР = N(реконструйовано) / N(після препроцесингу).
+    res_mask   — (опційно) додаткове обмеження ЛИШЕ для bias/roзд. здатності, напр. held-out
+                 події для LKRnn. Ефективність рахується на ПОВНОМУ наборі, бо це властивість
+                 алгоритму (чи є розв'язок), а не моделі; інакше порівняння методів нечесне,
+                 адже тренувальна вибірка складалася лише з успішних подій.
     Похибки — точно як у kinreco_eff_v3.py: bias_unc = sigma/sqrt(n),
     resolution_unc = sqrt(sqrt(mu4 - sigma^4)/n)."""
     centers, eff, eff_u, bias, bias_u, res, res_u = [], [], [], [], [], [], []
@@ -77,6 +80,8 @@ def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable):
         # для bias/roзд. здатності відкидаємо нефінітні та нефізичні значення
         # (напр. NaN у FKR або mtt ~104 ТеВ у LKR — див. PHYS_RANGE)
         mask_res = mask_ok & physical(reco, variable)
+        if res_mask is not None:
+            mask_res = mask_res & res_mask
         n_res = mask_res.sum()
         if n_res < 2:
             bias.append(np.nan); bias_u.append(np.nan)
@@ -93,10 +98,14 @@ def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable):
             np.array(bias), np.array(bias_u), np.array(res), np.array(res_u))
 
 
-def integral_res(reco, gen, valid, denom_mask, variable):
-    """Повертає (roзд. здатність, bias, ефективність, N використаних подій)."""
+def integral_res(reco, gen, valid, denom_mask, variable, res_mask=None):
+    """Повертає (roзд. здатність, bias, ефективність, N використаних подій).
+    res_mask — додаткове обмеження лише для bias/roзд. здатності (held-out для LKRnn);
+    ефективність завжди на повному наборі (властивість алгоритму, не моделі)."""
     eff = valid.sum() / denom_mask.sum() if denom_mask.sum() else float("nan")
     m = valid & physical(reco, variable)
+    if res_mask is not None:
+        m = m & res_mask
     n_used = int(m.sum())
     if n_used == 0:
         return float("nan"), float("nan"), eff, 0
@@ -104,7 +113,10 @@ def integral_res(reco, gen, valid, denom_mask, variable):
     return np.sqrt(np.mean((r - r.mean()) ** 2)), r.mean(), eff, n_used
 
 
-def load(fname):
+def load(fname, channel=None, nn_trained=None):
+    """Читає дерево. Якщо задано nn_trained (шлях до nn_trained.root від тренування),
+    додає маску 'nn_eval_ok': False для подій, які БРАЛИ УЧАСТЬ у навчанні NN.
+    Ці події виключаються ЛИШЕ з метрик LKRnn (алгоритмічні методи — на всьому датасеті)."""
     tree = uproot.open(fname)["ttbarTree"]
     keys = ["reco_passed_selection"]
     for v in VARS:
@@ -113,10 +125,23 @@ def load(fname):
             keys += [f"{v}_{m}", f"{v}_{m}_gen"]
     for m in METHODS:
         keys += [m, f"{m}_gen"]
-    return tree.arrays(keys, library="np")
+    keys = [k for k in dict.fromkeys(keys) if k in tree.keys()]
+    a = tree.arrays(keys, library="np")
+
+    n = tree.num_entries
+    eval_ok = np.ones(n, dtype=bool)
+    if nn_trained and os.path.exists(nn_trained):
+        t = uproot.open(f"{nn_trained}:nn_trained").arrays(library="np")
+        sel = t["channel"] == channel if channel is not None else np.ones(len(t["channel"]), bool)
+        ent = t["entry"][sel]
+        ent = ent[(ent >= 0) & (ent < n)]
+        eval_ok[ent] = False
+        print(f"    [NN] виключено {len(ent)} тренувальних подій -> для LKRnn лишається {int(eval_ok.sum())}")
+    a["nn_eval_ok"] = eval_ok
+    return a
 
 
-def make_plot(a, level, out_prefix):
+def make_plot(a, level, out_prefix, info=""):
     """level: 'det' (reco_passed_selection==1, *_lkr) or 'gen' (усі події, *_lkr_gen)."""
     suffix = "" if level == "det" else "_gen"
     if level == "det":
@@ -142,10 +167,17 @@ def make_plot(a, level, out_prefix):
         # діапазон бінінгу: події поза ним на графік не потрапляють
         in_range = (gen > BINS[var][0]) & (gen < BINS[var][-1])
         for m in METHODS:
+            if f"{var}_{m}{suffix}" not in a:
+                continue                      # метод відсутній у цьому файлі
             reco = a[f"{var}_{m}{suffix}"]
             passed = a[f"{m}{suffix}"] == 1  # прапорець успішної реконструкції методу
-            valid = base_valid & passed
-            cx, eff, eff_u, bias, bias_u, res, res_u = calc_bin_metrics(reco, gen, valid, base_valid, BINS[var], var)
+            valid = base_valid & passed      # ефективність — на ПОВНОМУ наборі (усі методи)
+            # bias/roзд. здатність для LKRnn — лише на held-out подіях (мережа їх не бачила).
+            # Ефективність держати на повному наборі критично: тренувальна вибірка складалася
+            # тільки з успішних подій, тож виключення її спотворило б знаменник.
+            res_mask = a["nn_eval_ok"] if m == "lkrnn" else None
+            cx, eff, eff_u, bias, bias_u, res, res_u = calc_bin_metrics(
+                reco, gen, valid, base_valid, BINS[var], var, res_mask)
             all_res += [r for r in res if r == r]
             all_bias += [b for b in bias if b == b]
 
@@ -153,9 +185,11 @@ def make_plot(a, level, out_prefix):
             axs_bias[k].errorbar(cx, bias, bias_u, marker='o', markersize=2, color=COLORS[m], label=m.upper())
             axs_eff[k].errorbar(cx, eff, eff_u, marker='o', markersize=2, color=COLORS[m], label=m.upper())
 
-            sigma, b, eff_int, n_all = integral_res(reco, gen, valid, base_valid, var)
+            sigma, b, eff_int, n_all = integral_res(reco, gen, valid, base_valid, var, res_mask)
             # скільки подій реально лягло на графіки (валідні, фізичні, у діапазоні бінінгу)
             n_plot = int((valid & in_range & physical(reco, var)).sum())
+            if res_mask is not None:
+                n_plot = int((valid & in_range & physical(reco, var) & res_mask).sum())
             counts.append((var, m, n_all, n_plot))
             print(f"{var:<8} | {m.upper():<7} | {100*eff_int:<8.2f} | {b:<10.4f} | {sigma:<10.4f}")
 
@@ -174,14 +208,14 @@ def make_plot(a, level, out_prefix):
                                  (axs_eff[k], fig_eff, "Efficiency")]:
             ax.set_xlabel(LABELS[var]); ax.set_ylabel(ylabel)
             ax.grid(True); ax.legend()
-    fig_res.suptitle(f"Роздільна здатність LKR vs LKRv3 ({level}-рівень)")
-    fig_res.savefig(f"plots/{out_prefix}_resolution_{level}.png", dpi=150)
-
-    fig_bias.suptitle(f"Bias LKR vs LKRv3 ({level}-рівень)")
-    fig_bias.savefig(f"plots/{out_prefix}_bias_{level}.png", dpi=150)
-
-    fig_eff.suptitle(f"Ефективність LKR vs LKRv3 ({level}-рівень)")
-    fig_eff.savefig(f"plots/{out_prefix}_efficiency_{level}.png", dpi=150)
+    methods_str = " vs ".join(m.upper() for m in METHODS)
+    lvl = {"det": "detector level", "gen": "generator level"}.get(level, level)
+    tail = f" ({lvl}){info}"      # info: e.g. ", emu channel, NN model: gen-trained"
+    for fig, metric, name in [(fig_res, "Resolution", "resolution"),
+                              (fig_bias, "Bias", "bias"),
+                              (fig_eff, "Efficiency", "efficiency")]:
+        fig.suptitle(f"{metric}: {methods_str}{tail}")
+        fig.savefig(f"plots/{out_prefix}_{name}_{level}.png", dpi=150)
 
     print(f"[I] Збережено: plots/{out_prefix}_{{resolution,bias,efficiency}}_{level}.png")
     return {"level": level, "n_den": n_den, "counts": counts}
@@ -198,7 +232,12 @@ def main():
                     help="канали: 1=ee, 2=mumu, 3=emu (за замовчуванням усі три)")
     ap.add_argument("--combine", action="store_true",
                     help="додатково побудувати сумарний результат по всіх заданих каналах")
+    ap.add_argument("--model", default="",
+                    help="підпис моделі NN на графіках, напр. 'detector-trained' або 'gen-trained'")
+    ap.add_argument("--nn-trained", dest="nn_trained", default="solve_nn_output/nn_trained.root",
+                    help="ROOT-файл із позначеними тренувальними подіями NN (виключаються з метрик LKRnn)")
     args = ap.parse_args()
+    model_note = f", NN model: {args.model}" if args.model else ""
 
     loaded, stats = [], []   # stats: (мітка каналу, результат make_plot) для зведення в кінці
     for ch in args.channels:
@@ -206,11 +245,12 @@ def main():
         if not os.path.exists(fname):
             print(f"[W] {fname} не знайдено — канал {ch} пропущено")
             continue
-        a = load(fname)
+        a = load(fname, channel=ch, nn_trained=args.nn_trained)
         label = f"c{ch} ({CHANNEL_NAMES.get(ch, '?')})"
+        info = f", {CHANNEL_NAMES.get(ch, '?')} channel{model_note}"
         print(f"\n[I] Канал {ch} ({CHANNEL_NAMES.get(ch, '?')}): {fname}, {len(a['mtt_gen'])} подій")
-        stats.append((label, make_plot(a, "det", f"kr_v4_c{ch}")))
-        stats.append((label, make_plot(a, "gen", f"kr_v4_c{ch}")))
+        stats.append((label, make_plot(a, "det", f"kr_v4_c{ch}", info)))
+        stats.append((label, make_plot(a, "gen", f"kr_v4_c{ch}", info)))
         loaded.append(a)
 
     if not loaded:
@@ -220,9 +260,10 @@ def main():
     if args.combine and len(loaded) > 1:
         a = combine(loaded)
         chs = "+".join(CHANNEL_NAMES.get(c, str(c)) for c in args.channels)
+        info = f", channels {chs}{model_note}"
         print(f"\n[I] Сумарно ({chs}): {len(a['mtt_gen'])} подій")
-        stats.append((f"comb ({chs})", make_plot(a, "det", "kr_v4_comb")))
-        stats.append((f"comb ({chs})", make_plot(a, "gen", "kr_v4_comb")))
+        stats.append((f"comb ({chs})", make_plot(a, "det", "kr_v4_comb", info)))
+        stats.append((f"comb ({chs})", make_plot(a, "gen", "kr_v4_comb", info)))
 
     print_counts(stats)
 
