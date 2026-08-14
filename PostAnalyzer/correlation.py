@@ -9,6 +9,7 @@ plot_correlation.py
 """
  
 import argparse
+import re
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -61,11 +62,14 @@ def plot_correlation_matrix(preds_dict, targets, outdir, title_suffix=""):
     )
  
     for col, (algo_name, preds) in enumerate(preds_dict.items()):
+        # targets може бути словником {алгоритм: gen-масив} — LKRnn має власний
+        # (held-out) набір подій, тож gen-рівень для нього інший
+        tgt = targets[algo_name] if isinstance(targets, dict) else targets
         for row, vn in enumerate(VARNAMES):
             ax  = axes[row, col]
             idx = row  # колонка в масиві [mtt, pttt, ytt, phitt]
- 
-            gen  = targets[:, idx]
+
+            gen  = tgt[:, idx]
             reco = preds[:,  idx]
  
             # Фільтруємо невдалі реконструкції (значення -1000)
@@ -136,8 +140,11 @@ def plot_correlation_matrix(preds_dict, targets, outdir, title_suffix=""):
     plt.close(fig)
  
  
-def load_from_root(root_file, tree_name="ttbarTree"):
-    """Завантажує результати LKR, LKRv3 та LKRNN алгоритмів з ROOT файлу."""
+def load_from_root(root_file, tree_name="ttbarTree", nn_trained=None, channel=None):
+    """Завантажує результати LKR, LKRv3 та LKRNN алгоритмів з ROOT файлу.
+    nn_trained — ROOT-файл із позначеними тренувальними подіями NN: для LKRNN такі події
+    виключаються (мережа їх бачила, інакше кореляція завищена). Алгоритмічні методи —
+    на всьому датасеті."""
     tree   = uproot.open(f"{root_file}:{tree_name}")
     avail  = set(tree.keys())
  
@@ -157,8 +164,19 @@ def load_from_root(root_file, tree_name="ttbarTree"):
     N = len(next(iter(gen_arrays.values())))
     targets = np.stack([gen_arrays[v] for v in variables], axis=1)
  
+    # held-out маска для LKRnn: True = подія НЕ брала участі в навчанні
+    eval_ok = np.ones(N, dtype=bool)
+    if nn_trained and os.path.exists(nn_trained):
+        t = uproot.open(f"{nn_trained}:nn_trained").arrays(library="np")
+        sel = t["channel"] == channel if channel is not None else np.ones(len(t["channel"]), bool)
+        ent = t["entry"][sel]
+        ent = ent[(ent >= 0) & (ent < N)]
+        eval_ok[ent] = False
+        print(f"[I] NN held-out: виключено {len(ent)} тренувальних подій")
+
     # Завантаження результатів реконструкції
     preds_dict = {}
+    targets_dict = {}
     for algo in algos:
         cols = []
         found = True
@@ -171,10 +189,15 @@ def load_from_root(root_file, tree_name="ttbarTree"):
                 found = False
                 break
         if found:
-            preds_dict[algo.upper()] = np.stack(cols, axis=1)
-            print(f"[I] {algo.upper()}: завантажено {N} подій")
- 
-    return preds_dict, targets
+            pred = np.stack(cols, axis=1)
+            tgt = targets
+            if algo == "lkrnn":       # LKRnn — лише на подіях, яких мережа не бачила
+                pred, tgt = pred[eval_ok], targets[eval_ok]
+            preds_dict[algo.upper()] = pred
+            targets_dict[algo.upper()] = tgt
+            print(f"[I] {algo.upper()}: завантажено {len(pred)} подій")
+
+    return preds_dict, targets_dict
  
  
 if __name__ == "__main__":
@@ -183,13 +206,22 @@ if __name__ == "__main__":
     parser.add_argument("--root", default="ttbar_output_3.root", help="Шлях до ROOT файлу")
     parser.add_argument("--tree", default="ttbarTree")
     parser.add_argument("--out",  default="plots")
+    parser.add_argument("--nn-trained", dest="nn_trained", default="solve_nn_output/nn_trained.root",
+                        help="ROOT-файл із тренувальними подіями NN (виключаються для LKRNN)")
+    parser.add_argument("--channel", type=int, default=None,
+                        help="номер каналу для звірки з nn_trained (за замовч. визначається з імені файлу)")
     args = parser.parse_args()
- 
+
     if not os.path.exists(args.root):
         print(f"[E] ROOT файл не знайдено: {args.root}")
         exit(1)
-        
-    preds_dict, targets = load_from_root(args.root, args.tree)
+
+    channel = args.channel
+    if channel is None:
+        m = re.search(r"_(\d+)\.root$", args.root)
+        channel = int(m.group(1)) if m else None
+
+    preds_dict, targets = load_from_root(args.root, args.tree, args.nn_trained, channel)
  
     if not preds_dict or targets is None:
         print("[E] Немає даних для побудови графіків")

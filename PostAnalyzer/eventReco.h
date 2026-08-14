@@ -10,8 +10,6 @@
 #include "selection.h"
 #include "settings.h"
 #include "read_config.h"
-#include <unordered_set>
-#include <fstream>
 // C++ library or ROOT header files
 #include <map>
 #include <TChain.h>
@@ -223,6 +221,7 @@ class ZEventRecoInput
     std::vector<TString> VecInFile; // container with input files
     double Weight; // weight for histogram filling
     std::string nameConfigFile; // option config file
+    bool StoreAllVars; // apply to signal MC, write out all events with all needed input variables + kine reco output
     
     // contstructor
     ZEventRecoInput()
@@ -230,6 +229,7 @@ class ZEventRecoInput
       // set default values
       Weight = 1.0;
       Gen = false;
+      StoreAllVars = false;
     }
     
     // add one more input file (str) to the chain
@@ -253,6 +253,7 @@ void eventreco(ZEventRecoInput in)
   printf("****** EVENTRECO ******\n");
   printf("input sample: %s\n", in.Name.Data());
   printf("type: %d   channel: %d\n", in.Type, in.Channel);
+  printf("StoreAllVars: %d\n", in.StoreAllVars);
   
   // steering
   // b-tagging discriminator for Combined Secondary Vertex Loose 
@@ -264,6 +265,10 @@ void eventreco(ZEventRecoInput in)
   // this flag determines whether generator level information is available
   // (should be available for signal MC)
   bool flagMC = (in.Type == 2 || in.Type == 3);
+  if(in.StoreAllVars && (in.Type != 2)) {
+    printf("ERROR: inconsistent StoreAllVars = %d and Type = %d\n", in.StoreAllVars, in.Type);
+    exit(1);
+  }
   
   // output file
   TFile* fout = TFile::Open(TString::Format("%s/%s-c%d.root", outDir.Data(), in.Name.Data(), in.Channel), "recreate");
@@ -272,7 +277,7 @@ void eventreco(ZEventRecoInput in)
   TChain* chain = new TChain("tree");
   for(int f = 0; f < in.VecInFile.size(); f++)
     chain->Add(in.VecInFile[f]);
-  ZTree* preselTree = new ZTree(flagMC);
+  ZTree* preselTree = new ZTree(flagMC, in.StoreAllVars);
   preselTree->Init(chain);
 
   // process generator level, if needed
@@ -294,23 +299,49 @@ void eventreco(ZEventRecoInput in)
   //TH1D* hInacc = new TH1D("hInacc", "KinReco inaccuracy", 1000, 0.0, 100.0);
   //TH1D* hAmbig = new TH1D("hAmbig", "KinReco ambiguity", 100, 0.0, 100.0);
 
-  // NN input/model selection (read early: needed for LKRnn construction below)
-  // krGenInputs: 1 -> feed reconstruction with generator-level MC truth (mcLp, mcB, mcNu...)
-  // krNNGen:     1 -> LKRnn uses generator-trained weights (NNWeights_gen) and the gen test set
-  //              (default: matches krGenInputs)
-  int krGenInputs = read_int(in.nameConfigFile, "krGenInputs", 0);
-  int krNNGen     = read_int(in.nameConfigFile, "krNNGen", krGenInputs);
-  if(krGenInputs) printf("[I] krGenInputs=1: kinematic reconstruction uses GENERATOR-LEVEL inputs\n");
-  if(krNNGen)     printf("[I] krNNGen=1: LKRnn uses GENERATOR-trained weights (NNWeights_gen)\n");
-
   // vector of kinematic reconstruction methods
   std::vector<KinRecoBase*> kinrecos;
-  if (read_int(in.nameConfigFile, "kr_FKR", 1)) kinrecos.push_back(new FKR());
-  if (read_int(in.nameConfigFile, "kr_SKR", 1)) kinrecos.push_back(new SKR());
-  if (read_int(in.nameConfigFile, "kr_LKR", 1)) kinrecos.push_back(new LKR());
-  if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) kinrecos.push_back(new LKRv2());
-  if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) kinrecos.push_back(new LKRv3());
-  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) kinrecos.push_back(new LKRnn(krNNGen));
+  // vector of kinematic reconstruction methods on generator level
+  // (using different names in order to store their output in separate branches)
+  std::vector<KinRecoBase*> kinrecos_gen;
+  auto add_kr_to_vec = [&kinrecos_gen](KinRecoBase* kr, const std::string& name, std::vector<KinRecoBase*>& vec) {
+    kr->SetName(name);
+    vec.push_back(kr);
+  };
+  if (read_int(in.nameConfigFile, "kr_FKR", 1)) {
+    kinrecos.push_back(new FKR());
+    add_kr_to_vec(new FKR(), "fkr_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_SKR", 1)) {
+    kinrecos.push_back(new SKR());
+    add_kr_to_vec(new SKR(), "skr_gen", kinrecos_gen);
+  }
+  LKR* kinreco_lkr = new LKR(); // store this pointer in order to call SelectbestJets()
+  if (read_int(in.nameConfigFile, "kr_LKR", 1)) {
+    kinrecos.push_back(kinreco_lkr);
+    add_kr_to_vec(new LKR(), "lkr_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_LKRv2", 1)) {
+    kinrecos.push_back(new LKRv2());
+    add_kr_to_vec(new LKRv2(), "lkrv2_gen", kinrecos_gen);
+  }
+  if (read_int(in.nameConfigFile, "kr_LKRv3", 1)) {
+    kinrecos.push_back(new LKRv3());
+    add_kr_to_vec(new LKRv3(), "lkrv3_gen", kinrecos_gen);
+  }
+  // LKRnn: нейромережева корекція поверх LKRv3.
+  //   krNNGen=0 -> детекторна гілка бере ДЕТЕКТОРНУ модель (звичайний режим);
+  //   krNNGen=1 -> детекторна гілка бере ГЕНЕРАТОРНУ модель (крос-тест gen-моделі на det-даних).
+  // Генераторна гілка (lkrnn_gen) ЗАВЖДИ використовує генераторну модель — застосовувати
+  // детекторну модель на gen-рівні сенсу не має.
+  int krNNGen = read_int(in.nameConfigFile, "krNNGen", 0);
+  if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) {
+    printf("[I] LKRnn: детекторна гілка -> %s модель\n", krNNGen ? "ГЕНЕРАТОРНА (крос-тест)" : "детекторна");
+    kinrecos.push_back(new LKRnn(krNNGen));
+    add_kr_to_vec(new LKRnn(true), "lkrnn_gen", kinrecos_gen);
+  }
+  // окремий LKRv3 для дампу 26 NN-ознак (LKRv3::computeFeatures) — незалежно від kr_LKRv3
+  LKRv3* kinreco_lkrv3_feat = new LKRv3();
   // vector of variables for kinematic reconstruction
   std::vector<KRVAR*> krvars;
   if (read_int(in.nameConfigFile, "krvar_mtt", 1)) krvars.push_back(new Mtt());
@@ -331,13 +362,23 @@ void eventreco(ZEventRecoInput in)
   // TTree to store kinematic reconstruction output
   TTree *tree_kr = nullptr;
   if(in.Name == "mcSigReco") {
-    outputFile = new TFile(TString::Format("ttbar_output_%d.root", in.Channel), "RECREATE");
+    std::string suffix = in.StoreAllVars ? "_full" : "";
+    outputFile = new TFile(TString::Format("ttbar_output%s_%d.root", suffix.c_str(), in.Channel), "RECREATE");
     tree_kr = new TTree("ttbarTree", "Tree storing ttbar event variables");
     for (auto& kr : kinrecos) {
       kr->init(tree_kr, krvars);
     }
+    for (auto& kr : kinrecos_gen) {
+      kr->init(tree_kr, krvars);
+    }
   }
   float mtt_gen, ytt_gen, pttt_gen, phitt_gen, dphitt_gen;
+  int reco_passed_selection, reco_passed_selectbestjets;
+  float mcLm[4], mcLp[4], mcJ1[4], mcJ2[4];
+  float mcMetPx, mcMetPy;
+  float recoLm[4], recoLp[4], recoJ1[4], recoJ2[4];
+  float recoMetPx, recoMetPy;
+  float nn_features[26], nn_features_gen[26]; // 26 NN-ознак (det / gen), -999 якщо джети не відібрані
   if (tree_kr) {
     //gen branches
     tree_kr->Branch("mtt_gen", &mtt_gen, "mtt_gen/F");
@@ -345,38 +386,32 @@ void eventreco(ZEventRecoInput in)
     tree_kr->Branch("ytt_gen", &ytt_gen, "ytt_gen/F");
     tree_kr->Branch("pttt_gen", &pttt_gen, "pttt_gen/F");
     tree_kr->Branch("dphitt_gen", &dphitt_gen, "dphitt_gen/F");
-  }
-  // =========================================================================
-  // 1. ВСТАВКА ДО ЦИКЛУ: Читання тестових індексів тільки для mcSigReco
-  // =========================================================================
-  std::unordered_set<long long> test_indices;
-  if(in.Name == "mcSigReco") {
-    // gen-навчена модель має власний тестовий набір (test_indices_gen.txt)
-    const char* idxFile = krNNGen ? "test_indices_gen.txt" : "test_indices.txt";
-    std::ifstream infile(idxFile);
-    long long temp_idx;
-    if (infile.is_open()) {
-      while (infile >> temp_idx) {
-        test_indices.insert(temp_idx);
-      }
-      printf("[I] Завантажено %zu подій для незалежного тестування (%s).\n", test_indices.size(), idxFile);
-    } else {
-      printf("[W] Файл %s не знайдено! Будуть оброблені ВСІ події.\n", idxFile);
+    if (in.StoreAllVars) {
+      tree_kr->Branch("reco_passed_selection", &reco_passed_selection, "reco_passed_selection/I");
+      tree_kr->Branch("reco_passed_selectbestjets", &reco_passed_selectbestjets, "reco_passed_selectbestjets/I");
+      tree_kr->Branch("mcLp", &mcLp, "mcLp[4]/F");
+      tree_kr->Branch("mcLm", &mcLm, "mcLm[4]/F");
+      tree_kr->Branch("mcJ1", &mcJ1, "mcJ1[4]/F");
+      tree_kr->Branch("mcJ2", &mcJ2, "mcJ2[4]/F");
+      tree_kr->Branch("mcMetPx", &mcMetPx, "mcMetPx/F");
+      tree_kr->Branch("mcMetPy", &mcMetPy, "mcMetPy/F");
+      tree_kr->Branch("recoLp", &recoLp, "recoLp[4]/F");
+      tree_kr->Branch("recoLm", &recoLm, "recoLm[4]/F");
+      tree_kr->Branch("recoJ1", &recoJ1, "recoJ1[4]/F");
+      tree_kr->Branch("recoJ2", &recoJ2, "recoJ2[4]/F");
+      tree_kr->Branch("recoMetPx", &recoMetPx, "recoMetPx/F");
+      tree_kr->Branch("recoMetPy", &recoMetPy, "recoMetPy/F");
+      tree_kr->Branch("nn_features", nn_features, "nn_features[26]/F");
+      tree_kr->Branch("nn_features_gen", nn_features_gen, "nn_features_gen[26]/F");
     }
   }
-  // =========================================================================
-  
   // event loop
-  printf("nevents=%d\n", nEvents);
   for(int e = 0; e < nEvents; e++)
   {
-    printf("before test indices \n");
-    if(in.Name == "mcSigReco" && !test_indices.empty() && test_indices.find(e) == test_indices.end()) {
-        continue; // Якщо події немає в test_indices.txt, просто переходимо до наступної
-    } 
-    printf("passed test indices \n");
+    if(e%100000 == 0) {
+      printf("done %d events [%.0f%%]\n", e, 100.*e/nEvents);
+    }
     chain->GetEntry(e);
-    printf("mcEventType=%d, type=%d, channel=%d \n", preselTree->mcEventType, in.Type, in.Channel);
     if(flagMC)
     {
       // skip background events for MC signal
@@ -384,7 +419,6 @@ void eventreco(ZEventRecoInput in)
       // skip signal events for MC 'ttbar other' (background)
       if(in.Type == 3 && preselTree->mcEventType == in.Channel) continue;
     }
-    printf("passed type check \n");
     // process generator level if needed
     if(in.Gen)
     {
@@ -398,111 +432,170 @@ void eventreco(ZEventRecoInput in)
       nGen++;
       continue;
     }
-    printf("passed prepare 4vectors\n");
     if(in.Type > 1)
       nGen++;
     
-    // process reco level if needed
-    //
-    // primary vertex selection
-    if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
-      continue;
-    // primary dataset name
-    //TString inFile = chain->GetCurrentFile()->GetName();
-    // select dilepton pair
-    TLorentzVector vecLepM, vecLepP;
-    double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
-    bool trig = false;
-    // *****************************************
-    // ***************** emu *******************
-    // *****************************************
-    if(in.Channel == 3)
-    {
-      // trigger: 12th to 17th bits
-      // (accept the event if at least one needed trigger bit is fired) 
-      for(int bit = 12; bit < 17; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      // call dileption selection routine (see selection.h for description)
-      if(trig)
-        SelectDilepEMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // *****************************************
-    // ***************** ee ********************
-    // *****************************************
-    if(in.Channel == 1)
-    {
-      // trigger: 6th to 11th bits
-      for(int bit = 6; bit < 11; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
-      // additinal requirement on the missing transverse energy
-      if(trig && met > 30.0)
-        SelectDilepEE(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // *****************************************
-    // **************** mumu *******************
-    // *****************************************
-    if(in.Channel == 2)
-    {
-      // trigger: 0th to 5th bits
-      for(int bit = 0; bit < 5; bit++)
-        if((preselTree->Triggers >> bit) & 1)
-        {
-          trig = true;
-          break;
-        }
-      double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
-      // additinal requirement on the missing transverse energy
-      if(trig && met > 30.0)
-        SelectDilepMuMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
-    }
-    // check if there is a dilepton pair found, otherwise skip the event
-    if(maxPtDiLep < 0.0)
-      continue;
-    // dilepton pair found, now select jets; 
-    // all jets are stored for kinematic reconstruction
-    std::vector<TLorentzVector> vecJets;
-    bool oneBTagJet = false;
-    for(int j = 0; j < preselTree->Njet; j++)
-    {
-      if(TMath::Abs(preselTree->jetEta[j]) > 2.4)
-        continue;
-      TLorentzVector vecJet;
-      vecJet.SetPtEtaPhiM(preselTree->jetPt[j], preselTree->jetEta[j], preselTree->jetPhi[j], preselTree->jetMass[j]);
-      // subtract muon and electron energy fractions
-      double corrE = vecJet.E() - preselTree->jetMuEn[j] - preselTree->jetElEn[j];
-      double corrPt = preselTree->jetPt[j] * corrE / vecJet.E();\
-      // require pT(jet) > 30 GeV
-      if(corrPt < 30.0)
-        continue;
-      TLorentzVector corrVec;
-      corrVec.SetPtEtaPhiE(corrPt, preselTree->jetEta[j], preselTree->jetPhi[j], corrE);
-      // b-tagging: check if there at least one b-tagged jet
-      // for b-tagged jet make the jet mass negative: this is for proper 
-      // identification of b-tagged jets in the kinematic reconstruction
-      if(preselTree->jetBTagDiscr[j] > bTagDiscrL)
+    auto process_reco_level = [bTagDiscrL, &in, preselTree](TLorentzVector& vecLepM, TLorentzVector& vecLepP, std::vector<TLorentzVector>& vecJets) {
+      // primary vertex selection
+      if(preselTree->Npv < 1 || preselTree->pvNDOF < 4 || preselTree->pvRho > 2.0 || TMath::Abs(preselTree->pvZ) > 24.0)
+        return false;
+      // primary dataset name
+      //TString inFile = chain->GetCurrentFile()->GetName();
+      // select dilepton pair
+      double maxPtDiLep = -1.0; // initialise with a negative value to determine later on whether a dilepton pair is found in the event
+      bool trig = false;
+      // *****************************************
+      // ***************** emu *******************
+      // *****************************************
+      if(in.Channel == 3)
       {
-        corrVec.SetPtEtaPhiM(corrVec.Pt(), corrVec.Eta(), corrVec.Phi(), -1 * corrVec.M());
-        oneBTagJet = true;
+        // trigger: 12th to 17th bits
+        // (accept the event if at least one needed trigger bit is fired) 
+        for(int bit = 12; bit < 17; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        // call dileption selection routine (see selection.h for description)
+        if(trig)
+          SelectDilepEMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
       }
-      vecJets.push_back(corrVec);
+      // *****************************************
+      // ***************** ee ********************
+      // *****************************************
+      if(in.Channel == 1)
+      {
+        // trigger: 6th to 11th bits
+        for(int bit = 6; bit < 11; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
+        // additinal requirement on the missing transverse energy
+        if(trig && met > 30.0)
+          SelectDilepEE(preselTree, vecLepM, vecLepP, maxPtDiLep);
+      }
+      // *****************************************
+      // **************** mumu *******************
+      // *****************************************
+      if(in.Channel == 2)
+      {
+        // trigger: 0th to 5th bits
+        for(int bit = 0; bit < 5; bit++)
+          if((preselTree->Triggers >> bit) & 1)
+          {
+            trig = true;
+            break;
+          }
+        double met = TMath::Sqrt(TMath::Power(preselTree->metPx, 2.0) + TMath::Power(preselTree->metPy, 2.0));
+        // additinal requirement on the missing transverse energy
+        if(trig && met > 30.0)
+          SelectDilepMuMu(preselTree, vecLepM, vecLepP, maxPtDiLep);
+      }
+      // check if there is a dilepton pair found, otherwise skip the event
+      if(maxPtDiLep < 0.0)
+        return false;
+      // dilepton pair found, now select jets; 
+      // all jets are stored for kinematic reconstruction
+      bool oneBTagJet = false;
+      for(int j = 0; j < preselTree->Njet; j++)
+      {
+        if(TMath::Abs(preselTree->jetEta[j]) > 2.4)
+          continue;
+        TLorentzVector vecJet;
+        vecJet.SetPtEtaPhiM(preselTree->jetPt[j], preselTree->jetEta[j], preselTree->jetPhi[j], preselTree->jetMass[j]);
+        // subtract muon and electron energy fractions
+        double corrE = vecJet.E() - preselTree->jetMuEn[j] - preselTree->jetElEn[j];
+        double corrPt = preselTree->jetPt[j] * corrE / vecJet.E();\
+        // require pT(jet) > 30 GeV
+        if(corrPt < 30.0)
+          continue;
+        TLorentzVector corrVec;
+        corrVec.SetPtEtaPhiE(corrPt, preselTree->jetEta[j], preselTree->jetPhi[j], corrE);
+        // b-tagging: check if there at least one b-tagged jet
+        // for b-tagged jet make the jet mass negative: this is for proper 
+        // identification of b-tagged jets in the kinematic reconstruction
+        if(preselTree->jetBTagDiscr[j] > bTagDiscrL)
+        {
+          corrVec.SetPtEtaPhiM(corrVec.Pt(), corrVec.Eta(), corrVec.Phi(), -1 * corrVec.M());
+          oneBTagJet = true;
+        }
+        vecJets.push_back(corrVec);
+      }
+      // if there are no two jets, skip the event
+      if(vecJets.size() < 2)
+        return false;
+      // require at least one b-tagged jet
+      if(!oneBTagJet)
+        return false;
+      return true;
+    };
+    
+    // process reco level if needed
+    TLorentzVector vecLepM, vecLepP;
+    std::vector<TLorentzVector> vecJets;
+    reco_passed_selection = process_reco_level(vecLepM, vecLepP, vecJets);
+    reco_passed_selectbestjets = 0;
+    //
+    if (reco_passed_selection == 0) {
+      if(in.StoreAllVars == 0) 
+        continue;
+      else {
+        for (auto& kr : kinrecos) {
+          kr->reset_vars();
+          for(int i = 0; i < 4; i++) {
+            recoLm[i] = recoLp[i] = recoJ1[i] = recoJ2[i] = -999.;
+          }
+          recoMetPx = recoMetPy = -999.;
+        }
+        for(int i = 0; i < 26; i++) nn_features[i] = -999.;
+      }
     }
-    // if there are no two jets, skip the event
-    if(vecJets.size() < 2)
-      continue;
-    // require at least one b-tagged jet
-    if(!oneBTagJet)
-      continue;
+    else {
+      if(in.StoreAllVars == 1) {
+        recoLm[0] = vecLepM.Px();
+        recoLm[1] = vecLepM.Py();
+        recoLm[2] = vecLepM.Pz();
+        recoLm[3] = vecLepM.M();
+        recoLp[0] = vecLepP.Px();
+        recoLp[1] = vecLepP.Py();
+        recoLp[2] = vecLepP.Pz();
+        recoLp[3] = vecLepP.M();
+        TLorentzVector jetBest1, jetBest2;
+        reco_passed_selectbestjets = kinreco_lkr->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
+        if(reco_passed_selectbestjets) {
+          recoJ1[0] = jetBest1.Px();
+          recoJ1[1] = jetBest1.Py();
+          recoJ1[2] = jetBest1.Pz();
+          recoJ1[3] = jetBest1.M();
+          recoJ2[0] = jetBest2.Px();
+          recoJ2[1] = jetBest2.Py();
+          recoJ2[2] = jetBest2.Pz();
+          recoJ2[3] = jetBest2.M();
+        }
+        else {
+          for(int i = 0; i < 4; i++) {
+            recoJ1[i] = recoJ2[i] = -999.;
+          }
+        }
+        recoMetPx = preselTree->metPx;
+        recoMetPy = preselTree->metPy;
+        // 26 NN-ознак (det): з ВЛАСНИХ LKRv3-джетів (не LKR-них recoJ1/recoJ2),
+        // щоб збігатися з тим, що LKRnn рахує на inference
+        for(int i = 0; i < 26; i++) nn_features[i] = -999.;
+        TLorentzVector jbf1, jbf2;
+        if(kinreco_lkrv3_feat->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jbf1, jbf2)) {
+          std::vector<float> ftr = kinreco_lkrv3_feat->computeFeatures(vecLepM, vecLepP, jbf1, jbf2, preselTree->metPx, preselTree->metPy);
+          for(int i = 0; i < 26; i++) nn_features[i] = ftr[i];
+        }
+      }
+    }
     // event selection done: increment the counter of selected events
-    nSel++;
+    if(reco_passed_selection)
+      nSel++;
     
     // fill generator level top, tbar and ttbar variables
     if(tree_kr) {
@@ -516,63 +609,82 @@ void eventreco(ZEventRecoInput in)
       double dphi_gen = fabs(t_gen.Phi() - tbar_gen.Phi());
       if (dphi_gen > M_PI) dphi_gen = 2 * M_PI - dphi_gen;
       dphitt_gen = dphi_gen;
-    }
-
-    // choose inputs for kinematic reconstruction: detector-level (default) or
-    // generator-level MC truth (closure test, krGenInputs=1). The very same
-    // selected events are used in both cases, only the input objects differ.
-    TLorentzVector krLepM = vecLepM, krLepP = vecLepP;
-    std::vector<TLorentzVector> krJets = vecJets;
-    Float_t krMetPx = preselTree->metPx, krMetPy = preselTree->metPy;
-    Float_t genBTag[2] = {1.0f, 1.0f};
-    Float_t* krBTag = preselTree->jetBTagDiscr;
-    if(krGenInputs)
-    {
-      krLepP.SetXYZM(preselTree->mcLp[0], preselTree->mcLp[1], preselTree->mcLp[2], preselTree->mcLp[3]);
-      krLepM.SetXYZM(preselTree->mcLm[0], preselTree->mcLm[1], preselTree->mcLm[2], preselTree->mcLm[3]);
-      TLorentzVector genB, genBbar;
-      genB.SetXYZM(preselTree->mcB[0], preselTree->mcB[1], preselTree->mcB[2], preselTree->mcB[3]);
-      genBbar.SetXYZM(preselTree->mcBbar[0], preselTree->mcBbar[1], preselTree->mcBbar[2], preselTree->mcBbar[3]);
-      // mark as b-tagged for the reconstruction (negative-mass convention, see selectBestJets)
-      genB.SetPtEtaPhiM(genB.Pt(), genB.Eta(), genB.Phi(), -1 * genB.M());
-      genBbar.SetPtEtaPhiM(genBbar.Pt(), genBbar.Eta(), genBbar.Phi(), -1 * genBbar.M());
-      krJets = { genB, genBbar };
-      krMetPx = preselTree->mcNu[0] + preselTree->mcNubar[0];
-      krMetPy = preselTree->mcNu[1] + preselTree->mcNubar[1];
-      krBTag = genBTag;
+      // fill other MC generator-level varaibles if needed
+      if(in.StoreAllVars) {
+        for(int i = 0; i < 4; i++) {
+          mcLp[i] = preselTree->mcLp[i];
+          mcLm[i] = preselTree->mcLm[i];
+          mcJ1[i] = preselTree->mcB[i];
+          mcJ2[i] = preselTree->mcBbar[i];
+        }
+        mcMetPx = preselTree->mcNu[0] + preselTree->mcNubar[0];
+        mcMetPy = preselTree->mcNu[1] + preselTree->mcNubar[1];
+        // run kinematic reconstruction on generator level
+        auto make_vector = [](const float* p1, const float* p2 = nullptr) {
+          std::vector<TLorentzVector> vec((p2 == nullptr) ? 1 : 2);
+          TLorentzVector part;
+          part.SetXYZM(p1[0], p1[1], p1[2], p1[3]);
+          vec[0] = part;
+          if(p2) {
+            part.SetXYZM(p2[0], p2[1], p2[2], p2[3]);
+            vec[1] = part;
+          }
+          return vec;
+        };
+        std::vector<TLorentzVector> vecLepM_gen = make_vector(mcLm);
+        std::vector<TLorentzVector> vecLepP_gen = make_vector(mcLp);
+        std::vector<TLorentzVector> vecJets_gen = make_vector(mcJ1, mcJ2);
+        std::vector<float> fake_btag = {1., 1.};
+        for (auto& kr : kinrecos_gen) {
+          kr->reset_vars();
+          std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM_gen[0], vecLepP_gen[0], vecJets_gen, &fake_btag[0], bTagDiscrL, mcMetPx, mcMetPy);
+          if(solution.size()) {
+            kr->calculate_vars(solution[0], solution[1], solution[2]);
+          }
+        }
+        // 26 NN-ознак (gen) з LKRv3-джетів на генераторних входах
+        for(int i = 0; i < 26; i++) nn_features_gen[i] = -999.;
+        TLorentzVector jbg1, jbg2;
+        if(kinreco_lkrv3_feat->selectBestJetsPublic(vecLepM_gen[0], vecLepP_gen[0], vecJets_gen, &fake_btag[0], bTagDiscrL, jbg1, jbg2)) {
+          std::vector<float> ftr = kinreco_lkrv3_feat->computeFeatures(vecLepM_gen[0], vecLepP_gen[0], jbg1, jbg2, mcMetPx, mcMetPy);
+          for(int i = 0; i < 26; i++) nn_features_gen[i] = ftr[i];
+        }
+      }
     }
 
     // run kinematic reconstruction to restore the top and antitop momenta
     bool flagPassedKinRec = false; // status used to go further to fill histograms
     TLorentzVector t, tbar; // vectors used to fill histograms
-    for (auto& kr : kinrecos) {
-      kr->reset_vars();
-      std::vector<TLorentzVector> solution = kr->reconstruct(krLepM, krLepP, krJets, krBTag, bTagDiscrL, krMetPx, krMetPy);
-      if(solution.size()) {
-        kr->calculate_vars(solution[0], solution[1], solution[2]);
-      }
-      // TEMPORARY use SKR solution to fill histograms
-      if (kr->GetName() == "skr") {
+    if (reco_passed_selection) {
+      for (auto& kr : kinrecos) {
+        kr->reset_vars();
+        std::vector<TLorentzVector> solution = kr->reconstruct(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, preselTree->metPx, preselTree->metPy);
         if(solution.size()) {
-          flagPassedKinRec = true;
-          t = solution[0];
-          tbar = solution[1];
+          kr->calculate_vars(solution[0], solution[1], solution[2]);
+        }
+        // TEMPORARY use SKR solution to fill histograms
+        if (kr->GetName() == "skr") {
+          if(solution.size()) {
+            flagPassedKinRec = true;
+            t = solution[0];
+            tbar = solution[1];
+          }
         }
       }
+      if(flagPassedKinRec>0)// successfull skr
+      {
+        // print the top and antitop momenta, if needed
+        //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
+        //printf("antitop:  (%8.3f  %8.3f  %8.3f  %8.3f)\n", tbar.X(), tbar.Y(), tbar.Z(), tbar.M());
+        nReco++;
+        
+        // fill histograms
+        double w = in.Weight;
+        //std::cout<<phitt_skr<<std::endl;
+        //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
+        FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
+      } // end kinreco
     }
-    if(flagPassedKinRec>0)// successfull skr
-    {
-      // print the top and antitop momenta, if needed
-      //printf("top:      (%8.3f  %8.3f  %8.3f  %8.3f)\n", t.X(), t.Y(), t.Z(), t.M());
-      //printf("antitop:  (%8.3f  %8.3f  %8.3f  %8.3f)\n", tbar.X(), tbar.Y(), tbar.Z(), tbar.M());
-      nReco++;
-      
-      // fill histograms
-      double w = in.Weight;
-      //std::cout<<phitt_skr<<std::endl;
-      //FillHistos_lkr(in.VecVarHisto, w, &ttbar_lkr, &vecLepM, &vecLepP);
-      FillHistos(in.VecVarHisto, w, &t, &tbar, &vecLepM, &vecLepP);
-    } // end kinreco
     if (tree_kr) {
       tree_kr->Fill();
     }
@@ -599,6 +711,9 @@ void eventreco(ZEventRecoInput in)
     outputFile->Close();
   }
   for (auto& kr : kinrecos) {
+    delete kr;
+  }
+  for (auto& kr : kinrecos_gen) {
     delete kr;
   }
   for (auto& krvar : krvars) {

@@ -39,14 +39,14 @@ def create_weights(out_dir, output_path, namespace):
 
         f.write("}\n")
 
-    print(f"[SUCCESS] Ваги ({namespace}) успішно експортовано у {output_path}!")
+    print(f"[SUCCESS] Ваги ({namespace}) з {out_dir} експортовано у {output_path}!")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--gen", action="store_true",
-                        help="експортувати генераторну модель (solve_nn_gen_output -> nn_weights_gen.h, namespace NNWeights_gen)")
+                        help="експортувати генераторну модель: solve_nn_gen_output -> kinreco/nn_weights_gen.h (NNWeights_gen)")
     parser.add_argument("--outdir", default=None, help="каталог з моделлю")
-    parser.add_argument("--output", default=None, help="шлях до вихідного header")
+    parser.add_argument("--output", default=None, help="шлях до вихідного C++ header")
     parser.add_argument("--namespace", default=None, help="ім'я namespace у header")
     args = parser.parse_args()
 

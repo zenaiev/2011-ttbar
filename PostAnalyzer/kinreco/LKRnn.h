@@ -8,8 +8,8 @@
 // Вихід мережі: {mtt, pttt, ytt, sin(phitt), cos(phitt)}
 // ttbar TLorentzVector будується з цих 5 змінних.
 
-// набір вказівників на ваги однієї моделі (детекторної або генераторної),
-// заповнюється в конструкторі з відповідного namespace (NNWeights / NNWeights_gen)
+// набір вказівників на ваги однієї моделі, заповнюється в конструкторі з
+// відповідного namespace (NNWeights = детекторна, NNWeights_gen = генераторна)
 struct NNParams {
   const std::vector<float> *ip0w, *ip0b, *ip1w, *ip1b;
   const std::vector<float> *b0_0w, *b0_0b, *b0_1w, *b0_1b, *b0_3w, *b0_3b, *b0_4w, *b0_4b;
@@ -31,7 +31,6 @@ class LKRnn : public LKRv3 {
     ) override;
 
   private:
-    // Нормалізація входу — заповнюється в конструкторі з обраного namespace
-    std::vector<float> x_mean, x_std;
-    NNParams _p;  // вказівники на ваги обраної моделі
+    std::vector<float> x_mean, x_std;  // нормалізація входу з обраної моделі
+    NNParams _p;                        // вказівники на ваги обраної моделі
 };

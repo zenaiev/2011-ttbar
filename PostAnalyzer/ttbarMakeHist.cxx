@@ -34,6 +34,7 @@ int main(int argc, char** argv)
   bool flagMCstop     = read_int(nameConfigFile, "flagMCstop", 1); // if 1, MC single top (background) will be processed
   bool flagMCwjets    = read_int(nameConfigFile, "flagMCwjets", 1); // if 1, MC W+jets (background) will be processed
   bool flagMCdy       = read_int(nameConfigFile, "flagMCdy", 1); // if 1, MC Drell-Yan (background) will be processed
+  bool flagStoreAllVars = read_int(nameConfigFile, "flagStoreAllVars", 0); // if 1, write out all events with all needed input variables + kine reco output
   //
   // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
   //
@@ -164,6 +165,11 @@ int main(int argc, char** argv)
       if(flagMCsig)
       {
         eventreco(in);
+        if (flagStoreAllVars) {
+          in.StoreAllVars = true;
+          eventreco(in);
+          in.StoreAllVars = false;
+        }
       }
       // MC ttbar other (background): re-use existing ZEventRecoInput, just change type
       if(flagMCsigOther) {
