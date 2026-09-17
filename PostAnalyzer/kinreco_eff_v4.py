@@ -1,16 +1,23 @@
 """
 kinreco_eff_v4.py
 ──────────────────
-Роздільна здатність / bias / ефективність для LKR та LKRv3 на
-ttbar_output_full_*.root (нова архітектура eventReco з reco+gen у одному дереві).
+Роздільна здатність / bias / ефективність LKR, LKRv3 та LKRnn по бінах на виході eventReco
+(ttbar_output_*_{ch}.root, reco+gen у одному дереві).
 
-Детекторний рівень: reco_passed_selection == 1, гілки *_lkr / *_lkrv3.
-Генераторний рівень: усі події, гілки *_lkr_gen / *_lkrv3_gen (окремо
-перевіряємо прапорець lkr_gen / lkrv3_gen == 1, кілька % подій без розв'язку).
+Детекторний рівень: reco_passed_selection == 1, гілки *_lkr / *_lkrv3 / *_lkrnn.
+Генераторний рівень: усі події, гілки *_gen (окремо перевіряємо прапорець методу == 1,
+кілька % подій без розв'язку).
+
+Ефективність усіх методів і bias/роздільна здатність LKR, LKRv3 — на ВСЬОМУ датасеті. Bias і роздільна
+здатність LKRnn — лише на подіях, не використаних у тренуванні NN (nn_split.eval_sample), як у
+integral_res.py та paper_figs.py (прапорець lkrnn = lkrv3 в усіх подіях, тож ефективність від мережі не залежить):
+  det-рівень — поза тренуванням det-моделі (для файлів з krNNGen 1: --split-model gen);
+  gen-рівень — поза тренуванням gen-моделі.
 
 Запуск:
-  python3 kinreco_eff_v4.py                      # канал emu (файл _3)
-  python3 kinreco_eff_v4.py --channel 3
+  python3 kinreco_eff_v4.py --input-pattern 'ttbar_output_det_{ch}.root' --combine
+  python3 kinreco_eff_v4.py --channels 3
+  python3 kinreco_eff_v4.py --input-pattern 'ttbar_output_full_{ch}.root' --split-model gen --model gen-trained
 """
 
 import argparse
@@ -18,6 +25,8 @@ import os
 import numpy as np
 import matplotlib.pyplot as plt
 import uproot
+
+import nn_split
 
 METHODS = ["lkr", "lkrv3", "lkrnn"]
 VARS = ["mtt", "pttt", "ytt"]
@@ -57,10 +66,7 @@ def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable, res_mask=None
     """Ефективність, bias, roздільна здатність у кожному біні gen.
     valid      — чисельник ефективності (base_valid & прапорець методу);
     denom_mask — знаменник ефективності: det -> reco_passed_selection==1, gen -> усі події.
-    res_mask   — (опційно) додаткове обмеження ЛИШЕ для bias/roзд. здатності, напр. held-out
-                 події для LKRnn. Ефективність рахується на ПОВНОМУ наборі, бо це властивість
-                 алгоритму (чи є розв'язок), а не моделі; інакше порівняння методів нечесне,
-                 адже тренувальна вибірка складалася лише з успішних подій.
+    res_mask   — (опційно) обмеження ЛИШЕ для bias/roзд. здатності: для LKRnn — події поза тренуванням NN.
     Похибки — точно як у kinreco_eff_v3.py: bias_unc = sigma/sqrt(n),
     resolution_unc = sqrt(sqrt(mu4 - sigma^4)/n)."""
     centers, eff, eff_u, bias, bias_u, res, res_u = [], [], [], [], [], [], []
@@ -100,8 +106,7 @@ def calc_bin_metrics(reco, gen, valid, denom_mask, bins, variable, res_mask=None
 
 def integral_res(reco, gen, valid, denom_mask, variable, res_mask=None):
     """Повертає (roзд. здатність, bias, ефективність, N використаних подій).
-    res_mask — додаткове обмеження лише для bias/roзд. здатності (held-out для LKRnn);
-    ефективність завжди на повному наборі (властивість алгоритму, не моделі)."""
+    res_mask обмежує лише bias/roзд. здатність; ефективність — на valid/denom_mask."""
     eff = valid.sum() / denom_mask.sum() if denom_mask.sum() else float("nan")
     m = valid & physical(reco, variable)
     if res_mask is not None:
@@ -113,10 +118,8 @@ def integral_res(reco, gen, valid, denom_mask, variable, res_mask=None):
     return np.sqrt(np.mean((r - r.mean()) ** 2)), r.mean(), eff, n_used
 
 
-def load(fname, channel=None, nn_trained=None):
-    """Читає дерево. Якщо задано nn_trained (шлях до nn_trained.root від тренування),
-    додає маску 'nn_eval_ok': False для подій, які БРАЛИ УЧАСТЬ у навчанні NN.
-    Ці події виключаються ЛИШЕ з метрик LKRnn (алгоритмічні методи — на всьому датасеті)."""
+def load(fname):
+    """Читає потрібні гілки дерева ttbarTree."""
     tree = uproot.open(fname)["ttbarTree"]
     keys = ["reco_passed_selection"]
     for v in VARS:
@@ -126,22 +129,27 @@ def load(fname, channel=None, nn_trained=None):
     for m in METHODS:
         keys += [m, f"{m}_gen"]
     keys = [k for k in dict.fromkeys(keys) if k in tree.keys()]
-    a = tree.arrays(keys, library="np")
-
-    n = tree.num_entries
-    eval_ok = np.ones(n, dtype=bool)
-    if nn_trained and os.path.exists(nn_trained):
-        t = uproot.open(f"{nn_trained}:nn_trained").arrays(library="np")
-        sel = t["channel"] == channel if channel is not None else np.ones(len(t["channel"]), bool)
-        ent = t["entry"][sel]
-        ent = ent[(ent >= 0) & (ent < n)]
-        eval_ok[ent] = False
-        print(f"    [NN] виключено {len(ent)} тренувальних подій -> для LKRnn лишається {int(eval_ok.sum())}")
-    a["nn_eval_ok"] = eval_ok
-    return a
+    return tree.arrays(keys, library="np")
 
 
-def make_plot(a, level, out_prefix, info=""):
+def add_eval_samples(a, fname, channel, split_model_det="det", all_events=False):
+    """Додає маски 'eval_det' / 'eval_gen': події, не використані в тренуванні NN
+    (nn_split.eval_sample); застосовуються лише до LKRnn. det-рівень — поза тренуванням
+    моделі split_model_det, gen-рівень — поза тренуванням gen-моделі."""
+    n = len(a["mtt_gen"])
+    if all_events:
+        a["eval_det"] = np.ones(n, dtype=bool)
+        a["eval_gen"] = np.ones(n, dtype=bool)
+        print("    [!] LKRnn на УСІХ подіях, разом із тренувальними (лише для порівняння)")
+        return
+    for level, model in (("det", split_model_det), ("gen", "gen")):
+        a[f"eval_{level}"], info = nn_split.eval_sample(fname, channel, model)
+        print(f"    [{level}] LKRnn оцінюється на {int(a[f'eval_{level}'].sum())} з {info['n']} подій "
+              f"(поза тренуванням {model}-моделі: тест {info['test']} + {info['extra']} непридатних, "
+              f"f={info['frac']:.4f})")
+
+
+def make_plot(a, level, out_prefix, info="", outdir="plots"):
     """level: 'det' (reco_passed_selection==1, *_lkr) or 'gen' (усі події, *_lkr_gen)."""
     suffix = "" if level == "det" else "_gen"
     if level == "det":
@@ -155,9 +163,9 @@ def make_plot(a, level, out_prefix, info=""):
     for fig in (fig_res, fig_bias, fig_eff):
         fig.subplots_adjust(0.07, 0.12, 0.98, 0.86, wspace=0.3)
 
-    n_den = int(base_valid.sum())
-    counts = []  # (var, method, n_all, n_plot) — друкуються окремим блоком у кінці
-    print(f"\n=== {level.upper()} рівень ({'reco_passed_selection==1' if level=='det' else 'усі події'}) ===")
+    counts = []  # (var, method, n_all, n_plot, n_den) — друкуються окремим блоком у кінці
+    print(f"\n=== {level.upper()} рівень ({'reco_passed_selection==1' if level=='det' else 'усі події'}, "
+          f"bias/res LKRnn — поза тренуванням NN) ===")
     print(f"{'Змінна':<8} | {'Метод':<7} | {'Еф. (%)':<8} | {'Bias':<10} | {'Roзд.':<10}")
     print("-" * 55)
 
@@ -171,11 +179,9 @@ def make_plot(a, level, out_prefix, info=""):
                 continue                      # метод відсутній у цьому файлі
             reco = a[f"{var}_{m}{suffix}"]
             passed = a[f"{m}{suffix}"] == 1  # прапорець успішної реконструкції методу
-            valid = base_valid & passed      # ефективність — на ПОВНОМУ наборі (усі методи)
-            # bias/roзд. здатність для LKRnn — лише на held-out подіях (мережа їх не бачила).
-            # Ефективність держати на повному наборі критично: тренувальна вибірка складалася
-            # тільки з успішних подій, тож виключення її спотворило б знаменник.
-            res_mask = a["nn_eval_ok"] if m == "lkrnn" else None
+            valid = base_valid & passed      # ефективність — на всьому датасеті для всіх методів
+            # bias/роздільна здатність LKRnn — лише на подіях поза тренуванням NN
+            res_mask = a[f"eval_{level}"] if nn_split.uses_nn(m) else None
             cx, eff, eff_u, bias, bias_u, res, res_u = calc_bin_metrics(
                 reco, gen, valid, base_valid, BINS[var], var, res_mask)
             all_res += [r for r in res if r == r]
@@ -187,10 +193,11 @@ def make_plot(a, level, out_prefix, info=""):
 
             sigma, b, eff_int, n_all = integral_res(reco, gen, valid, base_valid, var, res_mask)
             # скільки подій реально лягло на графіки (валідні, фізичні, у діапазоні бінінгу)
-            n_plot = int((valid & in_range & physical(reco, var)).sum())
+            in_plot = valid & in_range & physical(reco, var)
             if res_mask is not None:
-                n_plot = int((valid & in_range & physical(reco, var) & res_mask).sum())
-            counts.append((var, m, n_all, n_plot))
+                in_plot = in_plot & res_mask
+            n_plot = int(in_plot.sum())
+            counts.append((var, m, n_all, n_plot, int(base_valid.sum())))
             print(f"{var:<8} | {m.upper():<7} | {100*eff_int:<8.2f} | {b:<10.4f} | {sigma:<10.4f}")
 
         # масштаб осі Y — щільно навколо самих значень (як у січневій презентації):
@@ -211,14 +218,16 @@ def make_plot(a, level, out_prefix, info=""):
     methods_str = " vs ".join(m.upper() for m in METHODS)
     lvl = {"det": "detector level", "gen": "generator level"}.get(level, level)
     tail = f" ({lvl}){info}"      # info: e.g. ", emu channel, NN model: gen-trained"
+    os.makedirs(outdir, exist_ok=True)
     for fig, metric, name in [(fig_res, "Resolution", "resolution"),
                               (fig_bias, "Bias", "bias"),
                               (fig_eff, "Efficiency", "efficiency")]:
         fig.suptitle(f"{metric}: {methods_str}{tail}")
-        fig.savefig(f"plots/{out_prefix}_{name}_{level}.png", dpi=150)
+        fig.savefig(f"{outdir}/{out_prefix}_{name}_{level}.png", dpi=150)
+        plt.close(fig)
 
-    print(f"[I] Збережено: plots/{out_prefix}_{{resolution,bias,efficiency}}_{level}.png")
-    return {"level": level, "n_den": n_den, "counts": counts}
+    print(f"[I] Збережено: {outdir}/{out_prefix}_{{resolution,bias,efficiency}}_{level}.png")
+    return {"level": level, "counts": counts}
 
 
 def combine(arrays_list):
@@ -234,23 +243,30 @@ def main():
                     help="додатково побудувати сумарний результат по всіх заданих каналах")
     ap.add_argument("--model", default="",
                     help="підпис моделі NN на графіках, напр. 'detector-trained' або 'gen-trained'")
-    ap.add_argument("--nn-trained", dest="nn_trained", default="solve_nn_output/nn_trained.root",
-                    help="ROOT-файл із позначеними тренувальними подіями NN (виключаються з метрик LKRnn)")
+    ap.add_argument("--input-pattern", dest="input_pattern", default="ttbar_output_det_{ch}.root",
+                    help="шаблон вхідних файлів; за замовч. основні результати (det-модель), для крос-тесту: ttbar_output_full_{ch}.root з --split-model gen")
+    ap.add_argument("--split-model", dest="split_model", choices=["det", "gen"], default="det",
+                    help="модель, чиї тренувальні події виключаються на det-рівні "
+                         "(gen — для файлів з krNNGen 1); gen-рівень завжди поза тренуванням gen-моделі")
+    ap.add_argument("--all-events", dest="all_events", action="store_true",
+                    help="LKRnn теж на всіх подіях, разом із тренувальними (лише для порівняння)")
+    ap.add_argument("--outdir", default="plots", help="каталог для PNG")
     args = ap.parse_args()
     model_note = f", NN model: {args.model}" if args.model else ""
 
     loaded, stats = [], []   # stats: (мітка каналу, результат make_plot) для зведення в кінці
     for ch in args.channels:
-        fname = f"ttbar_output_full_{ch}.root"
+        fname = args.input_pattern.format(ch=ch)
         if not os.path.exists(fname):
             print(f"[W] {fname} не знайдено — канал {ch} пропущено")
             continue
-        a = load(fname, channel=ch, nn_trained=args.nn_trained)
+        a = load(fname)
         label = f"c{ch} ({CHANNEL_NAMES.get(ch, '?')})"
         info = f", {CHANNEL_NAMES.get(ch, '?')} channel{model_note}"
         print(f"\n[I] Канал {ch} ({CHANNEL_NAMES.get(ch, '?')}): {fname}, {len(a['mtt_gen'])} подій")
-        stats.append((label, make_plot(a, "det", f"kr_v4_c{ch}", info)))
-        stats.append((label, make_plot(a, "gen", f"kr_v4_c{ch}", info)))
+        add_eval_samples(a, fname, ch, args.split_model, args.all_events)
+        stats.append((label, make_plot(a, "det", f"kr_v4_c{ch}", info, args.outdir)))
+        stats.append((label, make_plot(a, "gen", f"kr_v4_c{ch}", info, args.outdir)))
         loaded.append(a)
 
     if not loaded:
@@ -262,8 +278,8 @@ def main():
         chs = "+".join(CHANNEL_NAMES.get(c, str(c)) for c in args.channels)
         info = f", channels {chs}{model_note}"
         print(f"\n[I] Сумарно ({chs}): {len(a['mtt_gen'])} подій")
-        stats.append((f"comb ({chs})", make_plot(a, "det", "kr_v4_comb", info)))
-        stats.append((f"comb ({chs})", make_plot(a, "gen", "kr_v4_comb", info)))
+        stats.append((f"comb ({chs})", make_plot(a, "det", "kr_v4_comb", info, args.outdir)))
+        stats.append((f"comb ({chs})", make_plot(a, "gen", "kr_v4_comb", info, args.outdir)))
 
     print_counts(stats)
 
@@ -271,28 +287,27 @@ def main():
 def print_counts(stats):
     """Зведення кількості подій — окремим блоком у кінці, щоб не заважало копіювати таблиці."""
     print("\n" + "=" * 78)
-    print("КІЛЬКІСТЬ ПОДІЙ (по каналах)")
+    print("КІЛЬКІСТЬ ПОДІЙ (по каналах; алгоритми — усі події, LKRnn — поза тренуванням NN)")
     print("=" * 78)
     print(f"{'Канал':<14} | {'Рівень':<6} | {'Змінна':<7} | {'Метод':<7} | "
           f"{'N (усі)':<9} | {'N (графік)':<10} | {'Знаменник':<9}")
     print("-" * 78)
     for label, s in stats:
-        for var, m, n_all, n_plot in s["counts"]:
+        for var, m, n_all, n_plot, n_den in s["counts"]:
             print(f"{label:<14} | {s['level']:<6} | {var:<7} | {m.upper():<7} | "
-                  f"{n_all:<9} | {n_plot:<10} | {s['n_den']:<9}")
+                  f"{n_all:<9} | {n_plot:<10} | {n_den:<9}")
         print("-" * 78)
 
     # сумарно по каналах (записи 'comb' не додаємо — це вже об'єднаний набір, було б подвійне рахування)
     per_channel = [(lbl, s) for lbl, s in stats if not lbl.startswith("comb")]
     if len(set(lbl for lbl, _ in per_channel)) < 2:
         return
-    totals, den = {}, {}
+    totals = {}
     for _, s in per_channel:
-        den[s["level"]] = den.get(s["level"], 0) + s["n_den"]
-        for var, m, n_all, n_plot in s["counts"]:
+        for var, m, n_all, n_plot, n_den in s["counts"]:
             key = (s["level"], var, m)
-            a0, p0 = totals.get(key, (0, 0))
-            totals[key] = (a0 + n_all, p0 + n_plot)
+            a0, p0, d0 = totals.get(key, (0, 0, 0))
+            totals[key] = (a0 + n_all, p0 + n_plot, d0 + n_den)
 
     chans = ", ".join(dict.fromkeys(lbl for lbl, _ in per_channel))
     print("\n" + "=" * 78)
@@ -306,9 +321,9 @@ def print_counts(stats):
             for m in METHODS:
                 if (level, var, m) not in totals:
                     continue
-                n_all, n_plot = totals[(level, var, m)]
+                n_all, n_plot, n_den = totals[(level, var, m)]
                 print(f"{level:<6} | {var:<7} | {m.upper():<7} | "
-                      f"{n_all:<9} | {n_plot:<10} | {den[level]:<9}")
+                      f"{n_all:<9} | {n_plot:<10} | {n_den:<9}")
         print("-" * 78)
 
 

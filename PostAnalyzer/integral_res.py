@@ -1,22 +1,21 @@
 """
 integral_res.py
 ────────────────
-Інтегральні метрики (ефективність, bias, roздільна здатність) для методів
-кінематичної реконструкції на ttbar_output_full_*.root (нова архітектура
-eventReco з reco+gen у одному дереві).
+Ефективність, bias і роздільна здатність методів кінематичної реконструкції
+(LKR, LKRv2, LKRv3, LKRnn, ...) СУМАРНО по всіх каналах: інтегрально та по бінах.
 
-Рахує ОБИДВА рівні:
-  det — детекторний: reco_passed_selection == 1, гілки *_lkr / *_lkrv3 / *_fkr
-  gen — генераторний: усі події, гілки *_lkr_gen / *_lkrv3_gen / *_fkr_gen
+Вибірки:
+  * алгоритмічні методи (LKR, LKRv2, LKRv3) — на ВСЬОМУ датасеті;
+  * bias і роздільна здатність LKRnn — лише на подіях, які не брали участі в тренуванні мережі
+    (nn_split.eval_sample): випадкова ~15% частина повного датасету, тож порівняння коректне;
+  * ефективність LKRnn — на ВСЬОМУ датасеті: прапорець lkrnn збігається з lkrv3 в усіх подіях,
+    тобто від ваг мережі не залежить.
 
-Для кожного методу перевіряється власний прапорець успішної реконструкції
-(lkr / lkrv3 / fkr, або з суфіксом _gen) — кілька % подій без розв'язку
-відкидаються з розрахунку bias/roздільної здатності.
-
-Запуск:
-  python3 integral_res.py                      # канал emu (файл _3)
-  python3 integral_res.py --channel 3
-  python3 integral_res.py ttbar_output_full_3.root   # або явний шлях до файлу
+Режими (det–det / gen–gen / gen–det):
+  python3 integral_res.py --input-pattern 'ttbar_output_det_{ch}.root'                      # det–det
+  python3 integral_res.py --input-pattern 'ttbar_output_det_{ch}.root' --level gen          # gen–gen
+  python3 integral_res.py --input-pattern 'ttbar_output_full_{ch}.root' --split-model gen   # gen–det (файли з krNNGen 1)
+  ... --all-events    # LKRnn теж на всіх подіях, разом із тренувальними (лише для порівняння)
 """
 
 import argparse
@@ -24,15 +23,16 @@ import os
 import numpy as np
 import uproot
 
+import nn_split
+
 VARS = ["mtt", "pttt", "ytt", "phitt", "dphitt"]
 CHANNEL_NAMES = {1: "ee", 2: "mumu", 3: "emu"}
 ANGULAR = {"phitt", "dphitt"}  # періодичні змінні: залишок згортається у [-pi, pi]
 # верхня межа реконструйованого значення — як у kinreco_eff_v3.py (reco < 9999),
-# відсікає чисельні артефакти LKR (напр. mtt ~104 ТеВ) і дає ідентичні v3 числа
+# відсікає чисельні артефакти LKR (напр. mtt ~104 ТеВ)
 PHYS_MAX = 9999.0
 PHYS_RANGE = {"mtt": (-999.0, PHYS_MAX), "pttt": (-999.0, PHYS_MAX), "ytt": (-999.0, PHYS_MAX)}
 
-# бінінг для per-bin виводу — як у kinreco_eff_v3/v4
 _pi = np.pi
 BINS = {
     "mtt": np.concatenate((np.linspace(340, 450, 5, endpoint=False),
@@ -43,8 +43,9 @@ BINS = {
                             np.logspace(np.log10(250), np.log10(800), 8))),
     "ytt": np.array([-2.4, -2.0, -1.75] + np.linspace(-1.6, 1.6, 16, endpoint=False).tolist() + [1.75, 2.0, 2.4]),
     "phitt": np.linspace(-_pi, _pi, 9),
-    "dphitt": np.linspace(-_pi, _pi, 9),
+    "dphitt": np.linspace(0, _pi, 9),     # |Δφ| ∈ [0, π]
 }
+SEP = "=" * 123
 
 
 def physical(reco, variable):
@@ -57,10 +58,9 @@ def physical(reco, variable):
 
 
 def detect_methods(tree):
-    """Автовизначення методів реконструкції, увімкнених у файлі (fkr/lkr/lkrv3/…)."""
+    """Методи реконструкції, наявні у файлі."""
     keys = set(tree.keys())
-    candidates = ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"]
-    return [m for m in candidates if m in keys]
+    return [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in keys]
 
 
 def wrap_angle(r):
@@ -71,10 +71,9 @@ def wrap_angle(r):
 
 
 def calc_metrics(reco, gen, valid, variable):
-    # відкидаємо нефінітні (напр. NaN у FKR) та нефізичні (напр. mtt ~104 ТеВ у LKR)
-    # значення з розрахунку bias/roзд. здатності — див. PHYS_RANGE
+    """(bias, roзд. здатність, N) по валідних фізичних подіях."""
     valid = valid & physical(reco, variable)
-    n_ok = valid.sum()
+    n_ok = int(valid.sum())
     if n_ok == 0:
         return float("nan"), float("nan"), 0
     residual = reco[valid] - gen[valid]
@@ -83,19 +82,22 @@ def calc_metrics(reco, gen, valid, variable):
     return residual.mean(), residual.std(), n_ok
 
 
-def binned_metrics(reco, gen, base_valid, passed, variable, bins):
-    """Ефективність (%) та roздільна здатність у кожному біні gen.
-    eff = N(reco успішна) / N(знаменника) у біні; res = std залишку (нефізичні відкинуто."""
-    effs, ress, ndens = [], [], []
+def binned_metrics(reco, gen, base_valid, passed, variable, bins, res_mask=None):
+    """Ефективність (%) і roзд. здатність у кожному біні gen.
+    Ефективність — на base_valid; res_mask (LKRnn: події поза тренуванням NN) обмежує лише roзд. здатність.
+    Повертає (effs, ress, знаменники ефективності, кількості подій для roзд. здатності)."""
+    effs, ress, ndens, nres = [], [], [], []
     valid = base_valid & passed
     phys = physical(reco, variable)
     for i in range(len(bins) - 1):
         mask_bin = (gen > bins[i]) & (gen < bins[i + 1])
         n_den = int((mask_bin & base_valid).sum())
-        n_num = int((mask_bin & valid).sum())
         ndens.append(n_den)
-        effs.append(100.0 * n_num / n_den if n_den else float("nan"))
+        effs.append(100.0 * int((mask_bin & valid).sum()) / n_den if n_den else float("nan"))
         mres = mask_bin & valid & phys
+        if res_mask is not None:
+            mres &= res_mask
+        nres.append(int(mres.sum()))
         if int(mres.sum()) >= 2:
             r = reco[mres] - gen[mres]
             if variable in ANGULAR:
@@ -103,91 +105,85 @@ def binned_metrics(reco, gen, base_valid, passed, variable, bins):
             ress.append(np.sqrt(np.mean((r - r.mean()) ** 2)))
         else:
             ress.append(float("nan"))
-    return effs, ress, ndens
+    return effs, ress, ndens, nres
 
 
-def print_binned_level(a, level, methods):
-    """Per-bin таблиці (ефективність та roзд. здатність у кожному біні) — окремий вивід."""
+def improvement(base, val):
+    """Покращення roзд. здатності відносно базового методу, у %."""
+    if base is None or not np.isfinite(base) or base <= 0 or not np.isfinite(val):
+        return "---"
+    return f"{100 * (base - val) / base:+.2f}%"
+
+
+def method_base(base, sample, method):
+    """Знаменник методу: алгоритмічні — усі події, LKRnn — лише події поза тренуванням NN."""
+    return base & sample if nn_split.uses_nn(method) else base
+
+
+def print_integral(a, level, methods, base, sample):
     suffix = "" if level == "det" else "_gen"
-    n_total = len(a["mtt_gen"])
-    base_valid = a["reco_passed_selection"] == 1 if level == "det" else np.ones(n_total, dtype=bool)
+    counts = []
+    print(f"\n{SEP}\nІНТЕГРАЛЬНО (весь діапазон), {level.upper()}-рівень\n{SEP}")
+    print(f"{'Змінна':<8} | {'Метод':<7} | {'N знам.':<8} | {'Еф. (%)':<9} | {'Bias':<11} | {'Resolution':<11} | "
+          f"{'vs LKR':<9} | {'vs LKRv3':<9}")
+    print(SEP)
+    for variable in VARS:
+        gen_arr = a[f"{variable}_gen"]
+        res_by = {}
+        for m in methods:
+            n_den = int(base.sum())
+            valid = base & (a[f"{m}{suffix}"] == 1)              # ефективність — на всьому датасеті
+            eff = 100.0 * int(valid.sum()) / n_den if n_den else float("nan")
+            res_valid = method_base(valid, sample, m)            # bias/res LKRnn — лише поза тренуванням NN
+            bias, res, n_ok = calc_metrics(a[f"{variable}_{m}{suffix}"], gen_arr, res_valid, variable)
+            res_by[m] = res
+            counts.append((variable, m, n_ok, n_den))
+            vs_lkr = improvement(res_by.get("lkr"), res) if m != "lkr" else "---"
+            vs_v3 = improvement(res_by.get("lkrv3"), res) if m not in ("lkr", "lkrv3") else "---"
+            print(f"{variable:<8} | {m.upper():<7} | {n_den:<8} | {eff:<9.2f} | {bias:<11.4f} | {res:<11.4f} | "
+                  f"{vs_lkr:<9} | {vs_v3:<9}")
+        print("-" * len(SEP))
+    return counts
 
-    print(f"\n{'#' * 100}")
-    print(f"# {level.upper()} рівень — ПО БІНАХ  (eff = N(reco)/N(знаменника) у біні, res = roзд. здатність)")
-    print("#" * 100)
+
+def print_binned(a, level, methods, base, sample):
+    suffix = "" if level == "det" else "_gen"
+    nn = [m for m in methods if nn_split.uses_nn(m)]
+    print(f"\n{SEP}\nПО БІНАХ, {level.upper()}-рівень  (eff = N(reco)/N(знаменника) у біні, res = roзд. здатність;"
+          f"\nN_bin — усі події (знаменник ефективності), N_res NN — події LKRnn поза тренуванням NN для res)\n{SEP}")
     for variable in VARS:
         bins = BINS[variable]
         gen_arr = a[f"{variable}_gen"]
-        per = {m: binned_metrics(a[f"{variable}_{m}{suffix}"], gen_arr, base_valid,
-                                 a[f"{m}{suffix}"] == 1, variable, bins) for m in methods}
+        per = {m: binned_metrics(a[f"{variable}_{m}{suffix}"], gen_arr, base, a[f"{m}{suffix}"] == 1, variable, bins,
+                                 sample if nn_split.uses_nn(m) else None) for m in methods}
         hdr = f"{'бін (центр)':<13} | {'N_bin':<8}"
+        if nn:
+            hdr += f" | {'N_res NN':<8}"
         for m in methods:
-            hdr += f" | {m.upper() + ' eff%':<9} | {m.upper() + ' res':<10}"
-        print(f"\n--- {variable} ---")
-        print(hdr)
-        print("-" * len(hdr))
+            hdr += f" | {m.upper() + ' eff%':<10} | {m.upper() + ' res':<10}"
+        print(f"\n--- {variable} ---\n{hdr}\n{'-' * len(hdr)}")
         centers = 0.5 * (bins[:-1] + bins[1:])
-        for bi in range(len(centers)):
-            n_den = per[methods[0]][2][bi]
-            row = f"{centers[bi]:<13.3f} | {n_den:<8}"
+        for bi, c in enumerate(centers):
+            row = f"{c:<13.3f} | {per[methods[0]][2][bi]:<8}"
+            if nn:
+                row += f" | {per[nn[0]][3][bi]:<8}"
             for m in methods:
-                effs, ress, _ = per[m]
-                row += f" | {effs[bi]:<9.2f} | {ress[bi]:<10.4f}"
+                row += f" | {per[m][0][bi]:<10.2f} | {per[m][1][bi]:<10.4f}"
             print(row)
 
 
-def print_level(a, level, methods, n_total):
-    suffix = "" if level == "det" else "_gen"
-    base_valid = a["reco_passed_selection"] == 1 if level == "det" else np.ones(n_total, dtype=bool)
-    # знаменник ефективності кінематичної реконструкції:
-    #   det — події, що пройшли детекторний відбір (reco_passed_selection==1)
-    #   gen — усі події
-    # (так само, як на січневій презентації: eff = N(reco успішна) / N(відібрані))
-    n_denom = int(base_valid.sum())
-    counts = []  # (змінна, метод, N) — друкуються окремим блоком у кінці
-
-    sep = "=" * 122
-    print(f"\n{sep}")
-    print(f"{level.upper()} рівень ({'reco_passed_selection==1' if level == 'det' else 'усі події'}), "
-          f"знаменник ефективності N = {n_denom}")
-    print(sep)
-    print(f"{'Змінна':<8} | {'Метод':<7} | {'Еф. (%)':<10} | {'Bias':<10} | {'Resolution':<12} | "
-          f"{'vs LKR':<10} | {'vs LKRv3':<10}")
-    print(sep)
-
-    def improvement(base, val):
-        """Покращення roзд. здатності відносно базового методу, у %."""
-        if base is None or np.isnan(base) or base <= 0 or np.isnan(val):
-            return f"{'---':<10}"
-        return f"{100 * (base - val) / base:+.2f}%"
-
-    for variable in VARS:
-        gen_arr = a[f"{variable}_gen"]
-        res_by_method = {}
-        for m in methods:
-            reco_arr = a[f"{variable}_{m}{suffix}"]
-            passed = a[f"{m}{suffix}"] == 1
-            valid = base_valid & passed
-            # ефективність = частка успішно реконструйованих серед знаменника (за прапорцем методу)
-            eff = 100.0 * int(valid.sum()) / n_denom if n_denom else float("nan")
-            # для bias/roзд.здатності додатково відкидаємо нефінітні значення (див. calc_metrics)
-            bias, res, n_ok = calc_metrics(reco_arr, gen_arr, valid, variable)
-            res_by_method[m] = res
-            counts.append((variable, m, n_ok))
-            vs_lkr   = improvement(res_by_method.get("lkr"), res)   if m != "lkr"   else f"{'---':<10}"
-            vs_lkrv3 = improvement(res_by_method.get("lkrv3"), res) if m != "lkrv3" else f"{'---':<10}"
-            if m == "lkr":            # для базового LKR колонка vs LKRv3 не має сенсу
-                vs_lkrv3 = f"{'---':<10}"
-            print(f"{variable:<8} | {m.upper():<7} | {eff:<10.2f} | {bias:<10.4f} | {res:<12.4f} | "
-                  f"{vs_lkr:<10} | {vs_lkrv3:<10}")
-        print("-" * 122)
-    return {"level": level, "n_den": n_denom, "counts": counts}
+def print_counts(counts, level):
+    print(f"\n{'=' * 60}\nКІЛЬКІСТЬ ПОДІЙ ({level}-рівень, сумарно)\n{'=' * 60}")
+    print(f"{'Змінна':<8} | {'Метод':<7} | {'N':<9} | {'Знаменник':<9}")
+    print("-" * 60)
+    for variable, m, n_ok, n_den in counts:
+        print(f"{variable:<8} | {m.upper():<7} | {n_ok:<9} | {n_den:<9}")
 
 
-def read_arrays(filename, methods=None):
-    """Читає потрібні гілки з файлу; повертає (масиви, список методів)."""
+def read_arrays(filename):
+    """Читає потрібні гілки; повертає (масиви, методи)."""
     tree = uproot.open(filename)["ttbarTree"]
-    methods = methods or detect_methods(tree)
+    methods = detect_methods(tree)
     keys = ["reco_passed_selection"]
     for v in VARS:
         keys.append(f"{v}_gen")
@@ -200,108 +196,74 @@ def read_arrays(filename, methods=None):
 
 
 def combine_arrays(arrays_list):
-    """Зшиває масиви кількох каналів в один набір (сумарна статистика)."""
+    """Зшиває масиви кількох каналів в один набір."""
     common = set(arrays_list[0])
     for a in arrays_list[1:]:
         common &= set(a)
     return {k: np.concatenate([a[k] for a in arrays_list]) for k in common}
 
 
-def calculate_integral_metrics(filename, methods=None, a=None, label=None, binned=True):
-    """Друкує інтегральні (і за потреби per-bin) метрики. Можна передати вже
-    завантажені масиви `a` (напр. об'єднані по каналах) замість читання файлу."""
-    if a is None:
-        a, methods = read_arrays(filename, methods)
-    methods = methods or [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in a]
-    if "lkr" not in methods:
-        print("[Попередження] LKR відсутній — колонка 'vs LKR' буде порожня")
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--input-pattern", dest="input_pattern", default="ttbar_output_det_{ch}.root",
+                    help="шаблон вхідних файлів; за замовч. основні результати (det-модель), для крос-тесту: ttbar_output_full_{ch}.root з --split-model gen")
+    ap.add_argument("--channels", "--channel", dest="channels", type=int, nargs="+", default=[1, 2, 3],
+                    help="канали, що об'єднуються: 1=ee, 2=mumu, 3=emu")
+    ap.add_argument("--level", choices=["det", "gen"], default="det", help="рівень оцінки")
+    ap.add_argument("--split-model", dest="split_model", choices=["det", "gen"], default=None,
+                    help="модель, чиї тренувальні події виключаються (за замовч. = --level; для gen–det: gen)")
+    ap.add_argument("--split-file", dest="split_file", default=None,
+                    help="dataset_split.root відповідної моделі (за замовч. визначається з --split-model або з файлу nn_apply)")
+    ap.add_argument("--all-events", dest="all_events", action="store_true",
+                    help="LKRnn теж на всіх подіях, разом із тренувальними (лише для порівняння)")
+    ap.add_argument("--no-binned", dest="no_binned", action="store_true", help="без виводу по бінах")
+    args = ap.parse_args()
+    split_model = args.split_model or args.level
 
-    n_total = len(a["mtt_gen"])
-    print(f"[I] {label or filename}: {n_total} подій, методи: {', '.join(m.upper() for m in methods)}")
-
-    # 1) інтегральні величини по всьому діапазону (лише детекторний рівень)
-    print(f"\n{'*' * 60}\n*  ІНТЕГРАЛЬНІ (весь діапазон)\n{'*' * 60}")
-    stats = [print_level(a, "det", methods, n_total)]
-
-    # 2) окремий per-bin вивід (роздільна здатність та ефективність по бінах)
-    if binned:
-        print(f"\n{'*' * 60}\n*  ПО БІНАХ\n{'*' * 60}")
-        print_binned_level(a, "det", methods)
-
-    return stats
-
-
-def print_counts(all_stats):
-    """Зведення кількості подій — окремим блоком у кінці, щоб не заважало копіювати таблиці."""
-    print("\n" + "=" * 70)
-    print("КІЛЬКІСТЬ ПОДІЙ (по каналах)")
-    print("=" * 70)
-    print(f"{'Канал':<12} | {'Рівень':<6} | {'Змінна':<7} | {'Метод':<7} | {'N':<9} | {'Знаменник':<9}")
-    print("-" * 70)
-    for label, stats in all_stats:
-        for s in stats:
-            for var, m, n_ok in s["counts"]:
-                print(f"{label:<12} | {s['level']:<6} | {var:<7} | {m.upper():<7} | "
-                      f"{n_ok:<9} | {s['n_den']:<9}")
-            print("-" * 70)
-
-    if len(all_stats) < 2:
+    loaded, names, infos, methods = [], [], [], None
+    for ch in args.channels:
+        fname = args.input_pattern.format(ch=ch)
+        if not os.path.exists(fname):
+            print(f"[W] {fname} не знайдено — канал {ch} пропущено")
+            continue
+        a, m_ch = read_arrays(fname)
+        methods = m_ch if methods is None else [m for m in methods if m in m_ch]
+        if args.all_events or not any(nn_split.uses_nn(m) for m in m_ch):
+            a["_sample"] = np.ones(len(a["mtt_gen"]), dtype=bool)
+        else:
+            a["_sample"], info = nn_split.eval_sample(fname, ch, split_model, args.split_file)
+            infos.append((ch, info))
+        loaded.append(a)
+        names.append(CHANNEL_NAMES.get(ch, str(ch)))
+    if not loaded:
+        print("[E] Жодного вхідного файлу не знайдено.")
         return
-    totals, den, methods_seen = {}, {}, []
-    for _, stats in all_stats:
-        for s in stats:
-            den[s["level"]] = den.get(s["level"], 0) + s["n_den"]
-            for var, m, n_ok in s["counts"]:
-                totals[(s["level"], var, m)] = totals.get((s["level"], var, m), 0) + n_ok
-                if m not in methods_seen:
-                    methods_seen.append(m)
 
-    chans = ", ".join(lbl for lbl, _ in all_stats)
-    print("\n" + "=" * 70)
-    print(f"КІЛЬКІСТЬ ПОДІЙ (сумарно: {chans})")
-    print("=" * 70)
-    print(f"{'Рівень':<6} | {'Змінна':<7} | {'Метод':<7} | {'N':<9} | {'Знаменник':<9}")
-    print("-" * 70)
-    for level in ("det", "gen"):
-        for var in VARS:
-            for m in methods_seen:
-                if (level, var, m) in totals:
-                    print(f"{level:<6} | {var:<7} | {m.upper():<7} | "
-                          f"{totals[(level, var, m)]:<9} | {den[level]:<9}")
-        print("-" * 70)
+    a = combine_arrays(loaded)
+    base = (a["reco_passed_selection"] == 1) if args.level == "det" else np.ones(len(a["mtt_gen"]), dtype=bool)
+    sample = a["_sample"]
+
+    print(SEP)
+    print(f"СУМАРНО {'+'.join(names)}  |  файли: {args.input_pattern}  |  рівень оцінки: {args.level}  |  "
+          f"методи: {', '.join(m.upper() for m in methods)}")
+    print("Ефективність усіх методів, bias/res алгоритмів: УСІ події")
+    if args.all_events:
+        print("Bias/res LKRnn: УСІ події, разом із тренувальними (лише для порівняння)")
+    elif infos:
+        print(f"Bias/res LKRnn: лише події поза тренуванням {split_model}-моделі (випадкова частина повного датасету)")
+        print(f"  {'канал':<6} | {'подій':>9} | {'придатні':>9} | {'train/val':>9} | {'тест':>8} | "
+              f"{'+ непридатні':>12} | {'частка f':>8}")
+        for ch, inf in infos:
+            print(f"  {CHANNEL_NAMES.get(ch, ch):<6} | {inf['n']:>9} | {inf['eligible']:>9} | {inf['trained']:>9} | "
+                  f"{inf['test']:>8} | {inf['extra']:>12} | {inf['frac']:>8.4f}")
+        print(f"  подій у вибірці для bias/res LKRnn: {int(sample.sum())} із {len(sample)}")
+    print(SEP)
+
+    counts = print_integral(a, args.level, methods, base, sample)
+    if not args.no_binned:
+        print_binned(a, args.level, methods, base, sample)
+    print_counts(counts, args.level)
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("file", nargs="?", default=None, help="явний шлях до ROOT-файлу (перекриває --channels)")
-    ap.add_argument("--channels", "--channel", dest="channels", type=int, nargs="+", default=[1, 2, 3],
-                    help="канали: 1=ee, 2=mumu, 3=emu (за замовчуванням усі три)")
-    args = ap.parse_args()
-
-    all_stats, loaded, chan_names = [], [], []
-    if args.file:
-        all_stats.append((os.path.basename(args.file), calculate_integral_metrics(args.file)))
-    else:
-        for ch in args.channels:
-            fname = f"ttbar_output_full_{ch}.root"
-            if not os.path.exists(fname):
-                print(f"[W] {fname} не знайдено — канал {ch} пропущено")
-                continue
-            print(f"\n{'#' * 122}\n# КАНАЛ {ch} ({CHANNEL_NAMES.get(ch, '?')})\n{'#' * 122}")
-            label = f"c{ch} ({CHANNEL_NAMES.get(ch, '?')})"
-            a, methods = read_arrays(fname)
-            all_stats.append((label, calculate_integral_metrics(fname, methods, a=a, label=label)))
-            loaded.append(a)
-            chan_names.append(CHANNEL_NAMES.get(ch, str(ch)))
-        if not all_stats:
-            print("[E] Жодного вхідного файлу не знайдено.")
-
-        # СУМАРНО по всіх каналах: зшиваємо події й рахуємо ті самі метрики разом
-        if len(loaded) > 1:
-            chs = "+".join(chan_names)
-            print(f"\n{'#' * 122}\n# СУМАРНО ПО КАНАЛАХ ({chs})\n{'#' * 122}")
-            calculate_integral_metrics(None, a=combine_arrays(loaded),
-                                       label=f"сумарно {chs}", binned=False)
-
-    if all_stats:
-        print_counts(all_stats)
+    main()
