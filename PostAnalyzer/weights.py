@@ -1,5 +1,4 @@
 import torch
-import json
 import os
 import sys
 import argparse
@@ -7,8 +6,12 @@ sys.path.append(os.getcwd())
 from train_solve_nn import SolveMLP
 
 def create_weights(out_dir, output_path, namespace):
+    state = torch.load(f"{out_dir}/solve_nn_best.pt", map_location="cpu")
+    if "x_mean" not in state:
+        raise SystemExit(f"[ERROR] {out_dir}/solve_nn_best.pt у старому форматі (без нормування всередині моделі) — "
+                         f"сконвертуйте: python convert_model_format.py --model-dir {out_dir} --level det|gen")
     model = SolveMLP()
-    model.load_state_dict(torch.load(f"{out_dir}/solve_nn_best.pt", map_location="cpu"))
+    model.load_state_dict(state)
     model.eval()
 
     assert hasattr(model, 'input_proj'), "[ERROR] Немає input_proj"
@@ -17,8 +20,8 @@ def create_weights(out_dir, output_path, namespace):
 
     assert len(model.blocks) == 3, f"[ERROR] Очікується 3 ResBlocks, знайдено {len(model.blocks)}"
 
-    with open(f"{out_dir}/norm_stats.json", "r") as f:
-        norm = json.load(f)
+    # нормування входу зберігається в самій моделі (буфери x_mean, x_std)
+    norm = {"x_mean": model.x_mean.tolist(), "x_std": model.x_std.tolist()}
 
     assert len(norm["x_mean"]) == 26, f"[ERROR] x_mean має {len(norm['x_mean'])} елементів, очікується 26"
 

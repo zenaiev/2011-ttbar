@@ -6,7 +6,29 @@
 #
 # Використання:
 #   ./run_full_parallel.sh [config_full_output.txt]
-CONFIG="${1:-config_full_output.txt}"
+# --- аргументи -------------------------------------------------------------
+CONFIG="config_full_output.txt"
+NNGEN=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --nngen) NNGEN="$2"; shift 2 ;;
+    -h|--help)
+      echo "Використання: $0 [конфіг] [--nngen 0|1]"
+      echo "  --nngen 0  детекторна NN-модель (основні результати)"
+      echo "  --nngen 1  генераторна NN-модель на детекторних даних (крос-тест)"
+      exit 0 ;;
+    -*) echo "[E] невідома опція: $1"; exit 1 ;;
+    *)  CONFIG="$1"; shift ;;
+  esac
+done
+
+if [ ! -f "$CONFIG" ]; then
+  echo "[E] конфіг не знайдено: $CONFIG"; exit 1
+fi
+if [ -n "$NNGEN" ] && [ "$NNGEN" != "0" ] && [ "$NNGEN" != "1" ]; then
+  echo "[E] --nngen приймає лише 0 або 1 (отримано: $NNGEN)"; exit 1
+fi
+[ -n "$NNGEN" ] && echo "[I] krNNGen=$NNGEN ($([ "$NNGEN" = 1 ] && echo 'ГЕНЕРАТОРНА модель на детекторних даних' || echo 'детекторна модель'))"
 
 # які канали увімкнені у конфізі
 declare -A CH=( [1]=channel_ee [2]=channel_mumu [3]=channel_emu )
@@ -21,11 +43,13 @@ pids=()
 for ch in "${enabled[@]}"; do
   cfg="config_run_c${ch}.txt"
   # копія конфіга з увімкненим лише одним каналом
-  awk -v c="$ch" '
+  awk -v c="$ch" -v g="$NNGEN" '
     $1=="channel_ee"   {print "channel_ee "   (c==1?1:0); next}
     $1=="channel_mumu" {print "channel_mumu " (c==2?1:0); next}
     $1=="channel_emu"  {print "channel_emu "  (c==3?1:0); next}
+    $1=="krNNGen" && g!="" {print "krNNGen " g; seen=1; next}
     {print}
+    END {if (g!="" && !seen) print "krNNGen " g}
   ' "$CONFIG" > "$cfg"
   echo "[I] Запуск каналу $ch -> лог full_run_c${ch}.log"
   ./ttbarMakeHist "$cfg" > "full_run_c${ch}.log" 2>&1 &

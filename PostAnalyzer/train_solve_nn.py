@@ -5,6 +5,8 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import uproot
 
+import nn_split
+
 # --- ЗОЛОТИЙ СТАНДАРТ (Швидкість GPU + Weighted L1 Loss) ---
 IN_DIM       = 26     # Абсолютна сліпота
 OUT_DIM      = 3      
@@ -52,15 +54,12 @@ def load_and_prepare(inputs, treename="ttbarTree", level="det"):
         ytt_lkr  = a[f"ytt_lkrv3{suffix}"]
         mtt_gen, pttt_gen, ytt_gen = a["mtt_gen"], a["pttt_gen"], a["ytt_gen"]
 
-        # відбір: eventReco-селекція (det), заповнені ознаки, успішний LKRv3, фізична база
-        ok = (feats[:, 0] != -999) & (a[f"lkrv3{suffix}"] == 1)
-        if level == "det":
-            ok &= (a["reco_passed_selection"] == 1)      # <-- лише події, що пройшли eventReco
-        ok &= np.isfinite(mtt_lkr) & (mtt_lkr > 300) & (mtt_lkr < 7000)
-        ok &= np.isfinite(mtt_gen) & (mtt_gen > 0)
+        # відбір подій, придатних до тренування — єдина реалізація в nn_split.train_filter
+        # (нею ж користуються integral_res.py та paper_figs.py, щоб знати, які події бачила мережа)
+        ok = nn_split.train_filter(a, level)
 
         # ціль: залишок у лог-просторі (точно як на inference LKRnn)
-        log_mtt_base = np.log(np.maximum(mtt_lkr[ok], 300.0))
+        log_mtt_base = np.log(mtt_lkr[ok])                 # база без обрізання (як у LKRnn.cxx)
         log_ptt_base = np.log(pttt_lkr[ok] + 1.0)
         d_log_mtt = np.log(mtt_gen[ok]) - log_mtt_base
         d_log_ptt = np.log(pttt_gen[ok] + 1.0) - log_ptt_base
@@ -81,25 +80,16 @@ def load_and_prepare(inputs, treename="ttbarTree", level="det"):
     return X, y, lkr, origin
 
 class SolveDataset(Dataset):
-    def __init__(self, X, y, norm=None):
-        if norm is None:
-            norm = {
-                "x_mean": X.mean(axis=0).tolist(),
-                "x_std":  (X.std(axis=0) + 1e-8).tolist()
-            }
-        self.norm   = norm
-        self.xm = np.array(norm["x_mean"], dtype=np.float32)
-        self.xs = np.array(norm["x_std"],  dtype=np.float32)
+    """Сирі ознаки й цілі: нормування входу виконує сама модель (буфери x_mean/x_std у SolveMLP)."""
+    def __init__(self, X, y):
         self.X_raw = X.astype(np.float32)
         self.y_raw = y.astype(np.float32)
 
     def __len__(self): return len(self.X_raw)
 
     def __getitem__(self, i):
-        # АУГМЕНТАЦІЮ ПРИБРАНО ЗВІДСИ, ПЕРЕНЕСЕНО НА ВІДЕОКАРТУ
-        xi = (self.X_raw[i] - self.xm) / self.xs
-        yi = self.y_raw[i]
-        return torch.from_numpy(xi), torch.from_numpy(yi)
+        # АУГМЕНТАЦІЯ — НА ВІДЕОКАРТІ (у циклі тренування), на сирих px/py
+        return torch.from_numpy(self.X_raw[i]), torch.from_numpy(self.y_raw[i])
 
 class ResBlock(nn.Module):
     def __init__(self, dim):
@@ -112,23 +102,33 @@ class SolveMLP(nn.Module):
     def __init__(self, in_dim=IN_DIM, out_dim=OUT_DIM):
         super().__init__()
         dim = 128
+        # Нормування входу — частина моделі й зберігається у .pt разом з вагами:
+        # x' = (x - x_mean) / (x_std + 1e-8), точно як у LKRnn.cxx. Значення задає set_normalization().
+        self.register_buffer("x_mean", torch.zeros(in_dim))
+        self.register_buffer("x_std", torch.ones(in_dim))
         self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
         # ЗАЛИШАЄМО 3 БЛОКИ, ЩОБ НЕ ЗЛАМАТИ weights.py ТА LKRnn.cxx
-        self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim)) 
+        self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim))
         self.head = nn.Linear(dim, out_dim)
-        
+
         nn.init.zeros_(self.head.weight)
         nn.init.zeros_(self.head.bias)
-        
-    def forward(self, x): 
+
+    def set_normalization(self, x_mean, x_std):
+        """x_mean, x_std — статистики тренувальної вибірки (x_std уже з +1e-8, як і раніше)."""
+        self.x_mean.copy_(torch.as_tensor(np.asarray(x_mean, dtype=np.float32)))
+        self.x_std.copy_(torch.as_tensor(np.asarray(x_std, dtype=np.float32)))
+
+    def forward(self, x):
+        x = (x - self.x_mean) / (self.x_std + 1e-8)
         raw = self.head(self.blocks(self.input_proj(x)))
         t = torch.tanh(raw)
-        
+
         # ЖОРСТКИЙ СИМЕТРИЧНИЙ МІКРО-ПОВІДОК (5%)
         out_0 = t[:, 0] * 0.05  # <--- ТУТ ТІЛЬКИ 0.05
         out_1 = t[:, 1] * 0.20
-        out_2 = t[:, 2] * 0.05  
-        
+        out_2 = t[:, 2] * 0.05
+
         return torch.stack([out_0, out_1, out_2], dim=1)
 
 # --- КАСТОМНА ФУНКЦІЯ ВТРАТ З ВАГАМИ ---
@@ -168,21 +168,6 @@ class EarlyStopping:
                 torch.save(self._clean(self.best_state), self.save_path)
         return self.counter >= self.patience
 
-def save_trained_root(path, origin, idx_trained, level):
-    """Зберігає у ROOT перелік подій, що БРАЛИ УЧАСТЬ у навчанні NN (train+val).
-    Дерево 'nn_trained' з гілками: channel, entry (позиція події у ttbarTree відповідного
-    ttbar_output_full_<channel>.root) та level ('det'/'gen').
-    Події, яких тут НЕМА, вважаються придатними для незалежної оцінки мережі."""
-    ch = origin[idx_trained, 0].astype(np.int32)
-    en = origin[idx_trained, 1].astype(np.int64)
-    order = np.lexsort((en, ch))          # впорядкувати за (канал, entry) для зручності
-    with uproot.recreate(path) as f:
-        f["nn_trained"] = {"channel": ch[order], "entry": en[order]}
-    per_ch = {int(c): int((ch == c).sum()) for c in np.unique(ch)}
-    print(f"[I] Позначено {len(ch)} тренувальних подій ({level}) -> {path}")
-    print(f"    по каналах: {per_ch}")
-
-
 def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[I] Використовуємо пристрій: {device}")
@@ -192,28 +177,27 @@ def train(args):
 
     N = len(X)
     idx = np.random.RandomState(SEED).permutation(N)
-    n_tr, n_val = int(0.70*N), int(0.15*N)
+    n_tr, n_val = int(nn_split.SPLIT_FRACTIONS[0]*N), int(nn_split.SPLIT_FRACTIONS[1]*N)
     idx_tr, idx_val, idx_te = idx[:n_tr], idx[n_tr:n_tr+n_val], idx[n_tr+n_val:]
 
-    # Позначаємо у ROOT саме ті події, що БРАЛИ УЧАСТЬ у навчанні (train + val).
-    # Логіка "позначаємо тренувальні": подія без мітки за замовчуванням придатна для
-    # оцінки, тож нова/непозначена подія ніколи не буде помилково зарахована як тестова.
+    # Мітки датасету (train / val / test для кожної придатної події) — окремий файл поруч із вагами.
     # Алгоритмічних реконструкцій (LKR/LKRv3/FKR) це не стосується — вони на всьому датасеті.
-    save_trained_root(os.path.join(args.outdir, "nn_trained.root"), origin,
-                      np.concatenate([idx_tr, idx_val]), args.level)
+    nn_split.write_split(nn_split.split_file(args.outdir), origin, idx_tr, idx_val, idx_te, args.level,
+                         {"inputs": list(args.inputs), "seed": SEED})
 
-    # Більше не передаємо augment=True, бо ми робимо це на GPU
+    # ознаки йдуть у модель сирими; нормування — всередині моделі, статистики лише з тренувальної частини
     ds_tr = SolveDataset(X[idx_tr], y[idx_tr])
-    norm = ds_tr.norm
-    ds_val = SolveDataset(X[idx_val], y[idx_val], norm)
-
-    with open(os.path.join(args.outdir, "norm_stats.json"), "w") as f: json.dump(norm, f, indent=2)
+    ds_val = SolveDataset(X[idx_val], y[idx_val])
+    x_mean = X[idx_tr].mean(axis=0)
+    x_std = X[idx_tr].std(axis=0) + 1e-8
 
     # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True
     loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
     loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
 
-    model = SolveMLP().to(device)
+    model = SolveMLP()
+    model.set_normalization(x_mean, x_std)
+    model = model.to(device)
     
     # МАГІЯ PYTORCH 2.0 (TORCH.COMPILE)
     try:

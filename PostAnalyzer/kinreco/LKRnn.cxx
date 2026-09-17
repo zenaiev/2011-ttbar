@@ -109,7 +109,10 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
     float ep_lkr = ttbar_lkrv3.E() + ttbar_lkrv3.Pz();
     float em_lkr = ttbar_lkrv3.E() - ttbar_lkrv3.Pz();
     float ytt_lkr = (ep_lkr > 0.f && em_lkr > 0.f) ? 0.5f * std::log(ep_lkr / em_lkr) : 0.f;
-    float log_mtt_lkrv3  = std::log(std::max(mtt_lkrv3_val, 300.f));
+    // база LKRv3 без обрізання: раніше max(m, 300) зводив усі події з m < 300 ГеВ до однієї бази,
+    // і з граничною поправкою +5% вони давали пік рівно при 300·e^0.05 = 315.38 ГеВ
+    if (!(mtt_lkrv3_val > 0.f)) return solution;
+    float log_mtt_lkrv3  = std::log(mtt_lkrv3_val);
     float log_pttt_lkrv3 = std::log(pttt_lkr + 1.0f);
 
     // ── 4. Нормалізація входу ─────────────────────────────────────────────────

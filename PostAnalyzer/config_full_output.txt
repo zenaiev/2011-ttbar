@@ -20,7 +20,7 @@ channel_emu 1
 kr_SKR 0
 kr_FKR 0
 kr_LKR 1
-kr_LKRv2 0
+kr_LKRv2 1
 kr_LKRv3 1
 kr_LKRnn 1
 
