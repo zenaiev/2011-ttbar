@@ -4,7 +4,7 @@ convert_model_format.py
 Разова конвертація моделі зі старого формату в новий, без перетренування.
 
   старий: solve_nn_best.pt (лише шари) + norm_stats.json + nn_trained.root (train+val)
-  новий:  solve_nn_best.pt (шари + буфери x_mean/x_std) + dataset_split.root (мітки train/val/test)
+  новий:  solve_nn_best.pt (шари + буфери x_mean/x_std) + solve_nn.onnx (для C++) + dataset_split.root (мітки)
 
 Мітки відновлюються точно: той самий фільтр, порядок подій і перестановка (SEED), що й у тренуванні.
 Перед записом перевіряється, що:
@@ -27,7 +27,7 @@ import torch
 import uproot
 
 import nn_split
-from train_solve_nn import SEED, SolveMLP, load_and_prepare
+from train_solve_nn import ONNX_NAME, SEED, SolveMLP, export_onnx, load_and_prepare
 
 
 def main():
@@ -101,7 +101,8 @@ def main():
     nn_split.write_split(nn_split.split_file(d), origin, idx_tr, idx_val, idx_te, args.level,
                          {"inputs": list(args.inputs), "seed": SEED,
                           "converted_from": "solve_nn_best.pt + norm_stats.json + nn_trained.root"})
-    print(f"[I] {d}: solve_nn_best.pt (ваги + нормування), {nn_split.SPLIT_FILE}; старі файли -> {old_dir}/")
+    export_onnx(model.state_dict(), os.path.join(d, ONNX_NAME))
+    print(f"[I] {d}: solve_nn_best.pt (ваги + нормування), {ONNX_NAME}, {nn_split.SPLIT_FILE}; старі файли -> {old_dir}/")
 
 
 if __name__ == "__main__":

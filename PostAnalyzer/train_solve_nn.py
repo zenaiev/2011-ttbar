@@ -107,7 +107,7 @@ class SolveMLP(nn.Module):
         self.register_buffer("x_mean", torch.zeros(in_dim))
         self.register_buffer("x_std", torch.ones(in_dim))
         self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
-        # ЗАЛИШАЄМО 3 БЛОКИ, ЩОБ НЕ ЗЛАМАТИ weights.py ТА LKRnn.cxx
+        # C++ (LKRnn) читає модель з ONNX через SOFIE, тож архітектуру можна змінювати без правок C++
         self.blocks = nn.Sequential(ResBlock(dim), ResBlock(dim), ResBlock(dim))
         self.head = nn.Linear(dim, out_dim)
 
@@ -130,6 +130,19 @@ class SolveMLP(nn.Module):
         out_2 = t[:, 2] * 0.05
 
         return torch.stack([out_0, out_1, out_2], dim=1)
+
+ONNX_NAME = "solve_nn.onnx"
+
+
+def export_onnx(state_dict, path):
+    """Експорт моделі (разом із нормуванням входу) в ONNX: C++ (LKRnn) читає його під час запуску через ROOT TMVA SOFIE."""
+    m = SolveMLP()
+    m.load_state_dict(state_dict)
+    m.eval()
+    dummy = m.x_mean.reshape(1, -1).clone()
+    torch.onnx.export(m, dummy, path, input_names=["x"], output_names=["y"], opset_version=17, dynamo=False)
+    print(f"[I] ONNX -> {path}")
+
 
 # --- КАСТОМНА ФУНКЦІЯ ВТРАТ З ВАГАМИ ---
 class WeightedL1Loss(nn.Module):
@@ -265,6 +278,7 @@ def train(args):
     clean_state_dict = EarlyStopping._clean(stopper.best_state)
     model.load_state_dict(clean_state_dict, strict=False)
     torch.save(clean_state_dict, os.path.join(args.outdir, "solve_nn_best.pt"))
+    export_onnx(clean_state_dict, os.path.join(args.outdir, ONNX_NAME))
     print(f"\n[I] Тренування завершено. Best val loss: {stopper.best_loss:.6f}")
 
 if __name__ == "__main__":

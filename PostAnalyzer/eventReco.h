@@ -329,16 +329,18 @@ void eventreco(ZEventRecoInput in)
     kinrecos.push_back(new LKRv3());
     add_kr_to_vec(new LKRv3(), "lkrv3_gen", kinrecos_gen);
   }
-  // LKRnn: нейромережева корекція поверх LKRv3.
-  //   krNNGen=0 -> детекторна гілка бере ДЕТЕКТОРНУ модель (звичайний режим);
-  //   krNNGen=1 -> детекторна гілка бере ГЕНЕРАТОРНУ модель (крос-тест gen-моделі на det-даних).
-  // Генераторна гілка (lkrnn_gen) ЗАВЖДИ використовує генераторну модель — застосовувати
-  // детекторну модель на gen-рівні сенсу не має.
-  int krNNGen = read_int(in.nameConfigFile, "krNNGen", 0);
+  // LKRnn: нейромережева корекція поверх LKRv3. Моделі (папки з solve_nn.onnx) читаються під час
+  // запуску через ROOT TMVA SOFIE, тож після перетренування перекомпіляція не потрібна.
+  //   krNNModel    — модель детекторної гілки (за замовч. solve_nn_output);
+  //   krNNModelGen — модель генераторної гілки (за замовч. solve_nn_gen_output);
+  //   krNNGen 1    — крос-тест: детекторна гілка бере генераторну модель.
   if (read_int(in.nameConfigFile, "kr_LKRnn", 1)) {
-    printf("[I] LKRnn: детекторна гілка -> %s модель\n", krNNGen ? "ГЕНЕРАТОРНА (крос-тест)" : "детекторна");
-    kinrecos.push_back(new LKRnn(krNNGen));
-    add_kr_to_vec(new LKRnn(true), "lkrnn_gen", kinrecos_gen);
+    std::string nnModelDet = read_string(in.nameConfigFile, "krNNModel", "solve_nn_output");
+    std::string nnModelGen = read_string(in.nameConfigFile, "krNNModelGen", "solve_nn_gen_output");
+    if (read_int(in.nameConfigFile, "krNNGen", 0)) nnModelDet = nnModelGen;
+    printf("[I] LKRnn: детекторна гілка -> %s, генераторна гілка -> %s\n", nnModelDet.c_str(), nnModelGen.c_str());
+    kinrecos.push_back(new LKRnn(nnModelDet));
+    add_kr_to_vec(new LKRnn(nnModelGen), "lkrnn_gen", kinrecos_gen);
   }
   // окремий LKRv3 для дампу 26 NN-ознак (LKRv3::computeFeatures) — незалежно від kr_LKRv3
   LKRv3* kinreco_lkrv3_feat = new LKRv3();

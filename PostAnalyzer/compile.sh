@@ -7,7 +7,8 @@ KINRECOCODE+='kinreco/LKR.cxx '
 KINRECOCODE+='kinreco/LKRv2.cxx '
 KINRECOCODE+='kinreco/LKRv3.cxx '
 KINRECOCODE+='kinreco/LKRnn.cxx '
-g++ $KINRECOCODE ttbarMakeHist.cxx read_config.cxx -o ttbarMakeHist `root-config --cflags --libs` -lMathMore -I.
+# -O2: оптимізація (нейромережа й реконструкції в рази швидші); TMVA SOFIE — читання ONNX-моделей LKRnn під час запуску
+g++ -O2 $KINRECOCODE ttbarMakeHist.cxx read_config.cxx -o ttbarMakeHist `root-config --cflags --libs` -lMathMore -lTMVA -lROOTTMVASofie -lROOTTMVASofieParser -I.
 g++ ttbarMakePlots.cxx -o ttbarMakePlots `root-config --cflags --libs`
 
 # create needed directories if do not exist yet

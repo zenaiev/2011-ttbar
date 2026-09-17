@@ -1,89 +1,127 @@
 #include "LKRnn.h"
-#include "nn_weights.h"      // namespace NNWeights      (детекторна модель)
-#include "nn_weights_gen.h"  // namespace NNWeights_gen  (генераторна модель)
+#include "TMVA/RSofieReader.hxx"
+#include <TInterpreter.h>
+#include <TSystem.h>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <dirent.h>
+#include <fstream>
+#include <iostream>
+#include <map>
+#include <string>
 #include <vector>
+#include <unistd.h>
 
-// заповнити NNParams вказівниками на ваги заданого namespace
-#define FILL_NNPARAMS(P, NS) do {                                             \
-    P.ip0w = &NS::input_proj_0_weight; P.ip0b = &NS::input_proj_0_bias;       \
-    P.ip1w = &NS::input_proj_1_weight; P.ip1b = &NS::input_proj_1_bias;       \
-    P.b0_0w = &NS::blocks_0_net_0_weight; P.b0_0b = &NS::blocks_0_net_0_bias; \
-    P.b0_1w = &NS::blocks_0_net_1_weight; P.b0_1b = &NS::blocks_0_net_1_bias; \
-    P.b0_3w = &NS::blocks_0_net_3_weight; P.b0_3b = &NS::blocks_0_net_3_bias; \
-    P.b0_4w = &NS::blocks_0_net_4_weight; P.b0_4b = &NS::blocks_0_net_4_bias; \
-    P.b1_0w = &NS::blocks_1_net_0_weight; P.b1_0b = &NS::blocks_1_net_0_bias; \
-    P.b1_1w = &NS::blocks_1_net_1_weight; P.b1_1b = &NS::blocks_1_net_1_bias; \
-    P.b1_3w = &NS::blocks_1_net_3_weight; P.b1_3b = &NS::blocks_1_net_3_bias; \
-    P.b1_4w = &NS::blocks_1_net_4_weight; P.b1_4b = &NS::blocks_1_net_4_bias; \
-    P.b2_0w = &NS::blocks_2_net_0_weight; P.b2_0b = &NS::blocks_2_net_0_bias; \
-    P.b2_1w = &NS::blocks_2_net_1_weight; P.b2_1b = &NS::blocks_2_net_1_bias; \
-    P.b2_3w = &NS::blocks_2_net_3_weight; P.b2_3b = &NS::blocks_2_net_3_bias; \
-    P.b2_4w = &NS::blocks_2_net_4_weight; P.b2_4b = &NS::blocks_2_net_4_bias; \
-    P.hw = &NS::head_weight; P.hb = &NS::head_bias;                           \
-} while(0)
+// Мережа (ONNX: нормування входу, шари, tanh·масштаб) читається під час запуску через ROOT TMVA SOFIE:
+// RSofieReader генерує з ONNX C++-код і компілює його інтерпретатором.
+//  * Згенерований код має простір імен за іменем файлу й пишеться в поточну папку, тож кожна модель
+//    завантажується в окремій тимчасовій папці з унікальним іменем (det- і gen-модель, паралельні
+//    процеси run_full_parallel.sh не конфліктують).
+//  * Кожна модель компілюється один раз на процес і перевикористовується (два проходи eventreco()).
+//  * Тимчасові файли видаляються лише при завершенні процесу: якщо видалити їх одразу, наступний
+//    згенерований header може отримати той самий inode, і інтерпретатор вважатиме його вже підключеним.
+namespace {
 
-static std::vector<float> linear_layer(
-    const std::vector<float>& in, const std::vector<float>& w, const std::vector<float>& b)
-{
-    int out_size = b.size(), in_size = in.size();
-    std::vector<float> out(out_size);
-    for (int j = 0; j < out_size; ++j) {
-        float sum = b[j];
-        for (int i = 0; i < in_size; ++i) sum += in[i] * w[j * in_size + i];
-        out[j] = sum;
-    }
-    return out;
-}
+const char* kModelFile = "solve_nn.onnx";   // файл моделі в її папці (пишуть train_solve_nn.py / export_onnx.py)
 
-static std::vector<float> layer_norm(
-    const std::vector<float>& x, const std::vector<float>& gamma, const std::vector<float>& beta)
-{
-    float mean = 0.f;
-    for (float v : x) mean += v;
-    mean /= x.size();
-    float var = 0.f;
-    for (float v : x) var += (v - mean)*(v - mean);
-    var /= x.size();
-    float inv_std = 1.f / std::sqrt(var + 1e-5f);
-    std::vector<float> out(x.size());
-    for (size_t i = 0; i < x.size(); ++i)
-        out[i] = (x[i] - mean) * inv_std * gamma[i] + beta[i];
-    return out;
-}
+struct SofieCache {
+    std::map<std::string, std::shared_ptr<TMVA::Experimental::RSofieReader>> readers;
+    std::vector<std::string> tmpDirs;
+    int loads = 0;
+};
+// навмисно не звільняється: скомпільований код моделей живе в інтерпретаторі до кінця процесу
+SofieCache* gSofie = new SofieCache;
 
-static void silu_inplace(std::vector<float>& x) {
-    for (float& v : x) v = v / (1.f + std::exp(-v));
-}
-
-static std::vector<float> res_block(
-    const std::vector<float>& x,
-    const std::vector<float>& w1, const std::vector<float>& b1,
-    const std::vector<float>& ln1_w, const std::vector<float>& ln1_b,
-    const std::vector<float>& w2, const std::vector<float>& b2,
-    const std::vector<float>& ln2_w, const std::vector<float>& ln2_b)
-{
-    auto h = linear_layer(x, w1, b1);
-    h = layer_norm(h, ln1_w, ln1_b);
-    silu_inplace(h);
-    h = linear_layer(h, w2, b2);
-    h = layer_norm(h, ln2_w, ln2_b);
-    for (size_t i = 0; i < h.size(); ++i) h[i] += x[i];
-    silu_inplace(h);
-    return h;
-}
-
-LKRnn::LKRnn(bool useGen) : LKRv3("lkrnn") {
-    if (useGen) {
-        x_mean = NNWeights_gen::x_mean;
-        x_std  = NNWeights_gen::x_std;
-        FILL_NNPARAMS(_p, NNWeights_gen);
-    } else {
-        x_mean = NNWeights::x_mean;
-        x_std  = NNWeights::x_std;
-        FILL_NNPARAMS(_p, NNWeights);
+void RemoveSofieTmpDirs() {
+    for (const auto& d : gSofie->tmpDirs) {
+        std::vector<std::string> files;
+        if (DIR* dir = opendir(d.c_str())) {
+            while (dirent* e = readdir(dir)) {
+                const std::string n(e->d_name);
+                if (n != "." && n != "..") files.push_back(d + "/" + n);
+            }
+            closedir(dir);
+        }
+        for (const auto& f : files) std::remove(f.c_str());
+        rmdir(d.c_str());
     }
 }
+
+std::shared_ptr<TMVA::Experimental::RSofieReader> LoadSofieModel(const std::string& absPath) {
+    auto cached = gSofie->readers.find(absPath);
+    if (cached != gSofie->readers.end()) return cached->second;
+    if (gSofie->loads == 0) std::atexit(RemoveSofieTmpDirs);
+
+    std::string tmpl = std::string(gSystem->TempDirectory()) + "/lkrnn_sofie_XXXXXX";
+    std::vector<char> buf(tmpl.begin(), tmpl.end());
+    buf.push_back('\0');
+    if (!mkdtemp(buf.data())) {
+        perror("[E] LKRnn: mkdtemp");
+        exit(1);
+    }
+    const std::string tmpDir(buf.data());
+    const std::string name = "lkrnn_" + std::to_string(getpid()) + "_" + std::to_string(gSofie->loads++);
+    if (gSystem->CopyFile(absPath.c_str(), (tmpDir + "/" + name + ".onnx").c_str()) != 0) {
+        fprintf(stderr, "[E] LKRnn: не вдалося скопіювати %s у %s\n", absPath.c_str(), tmpDir.c_str());
+        exit(1);
+    }
+
+    const std::string cwd = gSystem->WorkingDirectory();
+    const std::string log = tmpDir + "/load.log";
+    fflush(stdout);
+    fflush(stderr);
+    // інтерпретатор шукає #include відносно папки, де він ініціалізувався, — додаємо тимчасову папку
+    gInterpreter->AddIncludePath(tmpDir.c_str());
+    gSystem->ChangeDirectory(tmpDir.c_str());
+    gSystem->RedirectOutput(log.c_str(), "w");      // SOFIE друкує службові рядки під час завантаження
+    std::shared_ptr<TMVA::Experimental::RSofieReader> reader;
+    std::string loadError;
+    try {
+        reader = std::make_shared<TMVA::Experimental::RSofieReader>(name + ".onnx");
+    } catch (const std::exception& e) {
+        loadError = e.what();
+    }
+    gSystem->RedirectOutput(nullptr);
+    gSystem->ChangeDirectory(cwd.c_str());
+
+    std::vector<float> probe;
+    if (loadError.empty() && reader) {
+        try {
+            probe = reader->Compute(std::vector<float>(26, 0.f));
+        } catch (const std::exception& e) {
+            loadError = e.what();
+        }
+    }
+    if (probe.size() != 3) {
+        fprintf(stderr, "[E] LKRnn: не вдалося завантажити модель %s через SOFIE (тимчасові файли: %s)\n%s\nлог завантаження:\n",
+                absPath.c_str(), tmpDir.c_str(), loadError.c_str());
+        std::ifstream f(log);
+        std::cerr << f.rdbuf() << std::endl;
+        exit(1);
+    }
+    gSofie->tmpDirs.push_back(tmpDir);
+    gSofie->readers[absPath] = reader;
+    printf("[I] LKRnn: модель %s завантажено (SOFIE)\n", absPath.c_str());
+    return reader;
+}
+
+}  // namespace
+
+LKRnn::LKRnn(const std::string& modelDir) : LKRv3("lkrnn") {
+    const std::string src = modelDir + "/" + kModelFile;
+    char* absBuf = realpath(src.c_str(), nullptr);
+    if (!absBuf) {
+        fprintf(stderr, "[E] LKRnn: немає моделі %s (експорт: python export_onnx.py --model-dir %s)\n",
+                src.c_str(), modelDir.c_str());
+        exit(1);
+    }
+    const std::string absPath(absBuf);
+    free(absBuf);
+    _reader = LoadSofieModel(absPath);
+}
+
+LKRnn::~LKRnn() = default;
 
 std::vector<TLorentzVector> LKRnn::reconstruct(
     const TLorentzVector& vecLepM, const TLorentzVector& vecLepP,
@@ -115,25 +153,11 @@ std::vector<TLorentzVector> LKRnn::reconstruct(
     float log_mtt_lkrv3  = std::log(mtt_lkrv3_val);
     float log_pttt_lkrv3 = std::log(pttt_lkr + 1.0f);
 
-    // ── 4. Нормалізація входу ─────────────────────────────────────────────────
-    for (size_t i = 0; i < x.size(); ++i)
-        x[i] = (x[i] - x_mean[i]) / (x_std[i] + 1e-8f);
-
-    // ── 5. Інференс (3 БЛОКИ) з ваг обраної моделі (_p) ───────────────────────
-    auto h = linear_layer(x, *_p.ip0w, *_p.ip0b);
-    h = layer_norm(h, *_p.ip1w, *_p.ip1b);
-    silu_inplace(h);
-
-    h = res_block(h, *_p.b0_0w, *_p.b0_0b, *_p.b0_1w, *_p.b0_1b, *_p.b0_3w, *_p.b0_3b, *_p.b0_4w, *_p.b0_4b);
-    h = res_block(h, *_p.b1_0w, *_p.b1_0b, *_p.b1_1w, *_p.b1_1b, *_p.b1_3w, *_p.b1_3b, *_p.b1_4w, *_p.b1_4b);
-    h = res_block(h, *_p.b2_0w, *_p.b2_0b, *_p.b2_1w, *_p.b2_1b, *_p.b2_3w, *_p.b2_3b, *_p.b2_4w, *_p.b2_4b);
-
-    auto out = linear_layer(h, *_p.hw, *_p.hb);
-
-    // ── 6. ВІДНОВЛЕННЯ З ФІЗИЧНИМ ОБМЕЖЕННЯМ (TANH) ────────────────────
-    float d_log_mtt  = std::tanh(out[0]) * 0.05f; // <--- ТУТ ТІЛЬКИ 0.05f
-    float d_log_pttt = std::tanh(out[1]) * 0.20f;
-    float d_ytt      = std::tanh(out[2]) * 0.05f;
+    // ── 4–6. Мережа: нормування входу, шари й tanh·масштаб (0.05 / 0.20 / 0.05) — усе всередині ONNX ──
+    const std::vector<float> d = _reader->Compute(x);
+    const float d_log_mtt  = d[0];
+    const float d_log_pttt = d[1];
+    const float d_ytt      = d[2];
 
     const float mtt   = std::exp(log_mtt_lkrv3 + d_log_mtt);
     const float pttt  = std::exp(log_pttt_lkrv3 + d_log_pttt) - 1.0f;

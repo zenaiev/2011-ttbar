@@ -27,6 +27,9 @@ kr_LKRnn 1
 # NN model for the detector-level LKRnn branch:
 #   0 = detector-trained (normal), 1 = generator-trained (cross-test on detector data).
 # The generator-level branch (lkrnn_gen) always uses the generator-trained model.
+# Model folders with solve_nn.onnx, read at run time via ROOT TMVA SOFIE (no recompilation after retraining).
+krNNModel solve_nn_output
+krNNModelGen solve_nn_gen_output
 krNNGen 0
 
 # Variables for kinematic reconstruction
