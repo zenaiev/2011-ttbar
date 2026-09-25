@@ -8,7 +8,8 @@ import uproot
 import nn_split
 
 # --- ЗОЛОТИЙ СТАНДАРТ (Швидкість GPU + Weighted L1 Loss) ---
-IN_DIM       = 26     # Абсолютна сліпота
+#IN_DIM       = 26     # Абсолютна сліпота
+IN_DIM       = 29     # Абсолютна сліпота
 OUT_DIM      = 3      
 BATCH_SIZE   = 4096   
 LR           = 5e-4
@@ -24,7 +25,7 @@ if torch.cuda.is_available():
     # Оптимізація для відеокарт NVIDIA
     torch.backends.cudnn.benchmark = True
 
-def load_and_prepare(inputs, treename="ttbarTree", level="det"):
+def load_and_prepare(inputs, treename="ttbarTree", level="det", with_fkr=False):
     """Читає вихід eventReco: 26 готових ознак (nn_features) + база LKRv3 + gen-ціль,
     з одного чи кількох файлів (усі канали). Ознаки й база рахуються C++ (LKRv3::computeFeatures),
     тож train/inference повністю збігаються.
@@ -47,11 +48,18 @@ def load_and_prepare(inputs, treename="ttbarTree", level="det"):
                 "mtt_gen", "pttt_gen", "ytt_gen", f"lkrv3{suffix}"]
         if level == "det":
             keys.append("reco_passed_selection")
+        if with_fkr:
+            keys += ["mtt_fkr", "pttt_fkr", "ytt_fkr"]
         a = tree.arrays(keys, library="np")
         feats    = np.stack(a[fbr]).astype(np.float32)   # (N, 26) готові ознаки з C++
+        print(f'Using {feats.shape[1]} features')
         mtt_lkr  = a[f"mtt_lkrv3{suffix}"]
         pttt_lkr = a[f"pttt_lkrv3{suffix}"]
         ytt_lkr  = a[f"ytt_lkrv3{suffix}"]
+        if with_fkr:
+            mtt_fkr = np.where(a[f'mtt_fkr{suffix}'] < 0, a[f'mtt_lkrv3{suffix}'], a[f'mtt_fkr{suffix}'])
+            pttt_fkr = np.where(a[f'pttt_fkr{suffix}'] < 0, a[f'pttt_lkrv3{suffix}'], a[f'pttt_fkr{suffix}'])
+            ytt_fkr = np.where(a[f'ytt_fkr{suffix}'] < 0, a[f'ytt_lkrv3{suffix}'], a[f'ytt_fkr{suffix}'])
         mtt_gen, pttt_gen, ytt_gen = a["mtt_gen"], a["pttt_gen"], a["ytt_gen"]
 
         # відбір подій, придатних до тренування — єдина реалізація в nn_split.train_filter
@@ -169,11 +177,20 @@ class EarlyStopping:
         return self.counter >= self.patience
 
 def train(args):
+    num_workers = 4
+    if 0:
+        if not torch.cuda.is_available():
+            ncpu = os.cpu_count()
+            torch.set_num_threads(ncpu)
+            torch.set_num_interop_threads(max(1, ncpu // 2))
+            print(f'[I] CPU threads: {ncpu}')
+            num_workers = 2
+        
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[I] Використовуємо пристрій: {device}")
     
     os.makedirs(args.outdir, exist_ok=True)
-    X, y, lkr, origin = load_and_prepare(args.inputs, args.tree, args.level)
+    X, y, lkr, origin = load_and_prepare(args.inputs, args.tree, args.level, args.with_fkr)
 
     N = len(X)
     idx = np.random.RandomState(SEED).permutation(N)
@@ -192,8 +209,8 @@ def train(args):
     x_std = X[idx_tr].std(axis=0) + 1e-8
 
     # ОПТИМІЗАЦІЯ DATALOADER: persistent_workers=True
-    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True, persistent_workers=True)
-    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=4, pin_memory=True, persistent_workers=True)
+    loader_tr = DataLoader(ds_tr, batch_size=BATCH_SIZE, shuffle=True, num_workers=num_workers, pin_memory=True, persistent_workers=True)
+    loader_val = DataLoader(ds_val, batch_size=BATCH_SIZE*4, shuffle=False, num_workers=num_workers, pin_memory=True, persistent_workers=True)
 
     model = SolveMLP()
     model.set_normalization(x_mean, x_std)
@@ -278,6 +295,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=EPOCHS)
     parser.add_argument("--outdir", default=None,
                         help="каталог виходу (за замовч. solve_nn_output, або solve_nn_gen_output для --level gen)")
+    parser.add_argument("--with-fkr", action="store_true", help="additionaly use FKR variables")
     args = parser.parse_args()
     if args.outdir is None:
         args.outdir = "solve_nn_gen_output" if args.level == "gen" else "solve_nn_output"

@@ -36,7 +36,8 @@ import nn_split
 from train_solve_nn import SolveMLP
 
 VARS = ("mtt", "ytt", "pttt", "phitt", "dphitt")
-BRANCHES = {"det": ("", "nn_features"), "gen": ("_gen", "nn_features_gen")}   # гілка -> (суфікс, ознаки)
+#BRANCHES = {"det": ("", "nn_features"), "gen": ("_gen", "nn_features_gen")}   # гілка -> (суфікс, ознаки)
+BRANCHES = {"det": ("", "nn_features")}   # гілка -> (суфікс, ознаки)
 STEP = 200_000
 
 
@@ -99,10 +100,12 @@ def lkrnn_vars(d, has_jets, mtt3, pttt3, ytt3, phi3):
 
 
 def process_channel(ch, fin, fout, models, info, device):
+    #NN_PREFIX = 'lkrnn'
+    NN_PREFIX = 'lfkrnn'
     tree = uproot.open(fin)["ttbarTree"]
     names = list(tree.keys())
     for sfx, _ in BRANCHES.values():
-        for b in [f"lkrnn{sfx}"] + [f"{v}_lkrnn{sfx}" for v in VARS]:
+        for b in [f"{NN_PREFIX}{sfx}"] + [f"{v}_{NN_PREFIX}{sfx}" for v in VARS]:
             if b not in names:
                 names.append(b)
     with uproot.recreate(fout, compression=uproot.ZLIB(1)) as out:
@@ -120,10 +123,10 @@ def process_channel(ch, fin, fout, models, info, device):
                 ok, vals = lkrnn_vars(d, has_jets, chunk[f"mtt_lkrv3{sfx}"], chunk[f"pttt_lkrv3{sfx}"],
                                       chunk[f"ytt_lkrv3{sfx}"], chunk[f"phitt_lkrv3{sfx}"])
                 bad3 = chunk[f"lkrv3{sfx}"] != 1                        # значення «немає розв'язку» — як у reset_vars
-                chunk[f"lkrnn{sfx}"] = ok.astype(np.int32)
+                chunk[f"{NN_PREFIX}{sfx}"] = ok.astype(np.int32)
                 for v in VARS:
                     default = chunk[f"{v}_lkrv3{sfx}"][bad3][0] if bad3.any() else np.float32(-999.)
-                    chunk[f"{v}_lkrnn{sfx}"] = np.where(ok, vals[v], default).astype(np.float32)
+                    chunk[f"{v}_{NN_PREFIX}{sfx}"] = np.where(ok, vals[v], default).astype(np.float32)
             if out_tree is None:
                 types = {k: (chunk[k].dtype if chunk[k].ndim == 1 else np.dtype((chunk[k].dtype, chunk[k].shape[1:])))
                          for k in names}

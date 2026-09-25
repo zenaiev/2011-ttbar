@@ -374,7 +374,7 @@ void eventreco(ZEventRecoInput in)
   }
   float mtt_gen, ytt_gen, pttt_gen, phitt_gen, dphitt_gen;
   int reco_passed_selection, reco_passed_selectbestjets;
-  float mcLm[4], mcLp[4], mcJ1[4], mcJ2[4];
+  float mcLm[4], mcLp[4], mcJ1[4], mcJ2[4], mcNu[4], mcNubar[4], mcWp[4], mcWm[4], mcT[4], mcTbar[4];
   float mcMetPx, mcMetPy;
   float recoLm[4], recoLp[4], recoJ1[4], recoJ2[4];
   float recoMetPx, recoMetPy;
@@ -393,6 +393,12 @@ void eventreco(ZEventRecoInput in)
       tree_kr->Branch("mcLm", &mcLm, "mcLm[4]/F");
       tree_kr->Branch("mcJ1", &mcJ1, "mcJ1[4]/F");
       tree_kr->Branch("mcJ2", &mcJ2, "mcJ2[4]/F");
+      tree_kr->Branch("mcNu", &mcNu, "mcNu[4]/F");
+      tree_kr->Branch("mcNubar", &mcNubar, "mcNubar[4]/F");
+      tree_kr->Branch("mcWp", &mcWp, "mcWp[4]/F");
+      tree_kr->Branch("mcWm", &mcWm, "mcWm[4]/F");
+      tree_kr->Branch("mcT", &mcT, "mcT[4]/F");
+      tree_kr->Branch("mcTbar", &mcTbar, "mcTbar[4]/F");
       tree_kr->Branch("mcMetPx", &mcMetPx, "mcMetPx/F");
       tree_kr->Branch("mcMetPy", &mcMetPy, "mcMetPy/F");
       tree_kr->Branch("recoLp", &recoLp, "recoLp[4]/F");
@@ -565,7 +571,8 @@ void eventreco(ZEventRecoInput in)
         recoLp[2] = vecLepP.Pz();
         recoLp[3] = vecLepP.M();
         TLorentzVector jetBest1, jetBest2;
-        reco_passed_selectbestjets = kinreco_lkr->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
+        //reco_passed_selectbestjets = kinreco_lkr->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
+        reco_passed_selectbestjets = kinreco_lkrv3_feat->selectBestJetsPublic(vecLepM, vecLepP, vecJets, preselTree->jetBTagDiscr, bTagDiscrL, jetBest1, jetBest2);
         if(reco_passed_selectbestjets) {
           recoJ1[0] = jetBest1.Px();
           recoJ1[1] = jetBest1.Py();
@@ -616,6 +623,12 @@ void eventreco(ZEventRecoInput in)
           mcLm[i] = preselTree->mcLm[i];
           mcJ1[i] = preselTree->mcB[i];
           mcJ2[i] = preselTree->mcBbar[i];
+          mcNu[i] = preselTree->mcNu[i];
+          mcNubar[i] = preselTree->mcNubar[i];
+          mcWp[i] = preselTree->mcWp[i];
+          mcWm[i] = preselTree->mcWm[i];
+          mcT[i] = preselTree->mcT[i];
+          mcTbar[i] = preselTree->mcTbar[i];
         }
         mcMetPx = preselTree->mcNu[0] + preselTree->mcNubar[0];
         mcMetPy = preselTree->mcNu[1] + preselTree->mcNubar[1];

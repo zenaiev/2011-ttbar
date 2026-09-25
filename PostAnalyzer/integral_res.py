@@ -60,7 +60,8 @@ def physical(reco, variable):
 def detect_methods(tree):
     """Методи реконструкції, наявні у файлі."""
     keys = set(tree.keys())
-    return [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in keys]
+    #return [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in keys]
+    return [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "lfkrnn", "fkr", "skr"] if m in keys]
 
 
 def wrap_angle(r):

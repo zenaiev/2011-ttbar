@@ -33,13 +33,14 @@ import nn_split
 
 BASE = "lkr"                       # базовий метод, з яким порівнюємо
 VARS = ["mtt", "pttt", "ytt"]
-NICE = {"lkr": "LKR", "lkrv2": "LKRv2", "lkrv3": "LKRv3", "lkrnn": "LKRnn",
+NICE = {"lkr": "LKR", "lkrv2": "LKRv2", "lkrv3": "LKRv3", "lkrnn": "LKRnn", "lfkrnn": "LFKRnn",
         "fkr": "FKR", "skr": "SKR"}
 COLORS = {"lkr": "tab:blue", "lkrv2": "tab:red", "lkrv3": "tab:orange",
-          "lkrnn": "tab:green", "fkr": "tab:purple", "skr": "tab:brown"}
+          "lkrnn": "tab:green", "lfkrnn": "tab:olive", "fkr": "tab:purple", "skr": "tab:brown"}
 
 
 def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
+    #print('make_figure: ', methods)
     """Одна фігура: рядки = efficiency/resolution/bias, колонки = змінні."""
     suffix = "" if level == "det" else "_gen"
     n = len(a["mtt_gen"])
@@ -47,12 +48,14 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
 
     eff_all = []          # ефективність з усіх панелей -> спільна вісь Y
     fig, axes = plt.subplots(3, len(VARS), figsize=(13, height))
+    #fig, axes = plt.subplots(6, len(VARS), figsize=(13, height))
     fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.07,
                         wspace=0.28, hspace=0.28)
 
     for col, var in enumerate(VARS):
         gen = a[f"{var}_gen"]
         span = {"eff": [], "res": [], "bias": []}
+        ref = None
         for m in methods:
             if f"{var}_{m}{suffix}" not in a:
                 continue
@@ -62,12 +65,22 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
             res_mask = a["eval_sample"] if nn_split.uses_nn(m) else None
             cx, eff, eff_u, bias, bias_u, res, res_u = k4.calc_bin_metrics(
                 reco, gen, valid, base_all, k4.BINS[var], var, res_mask)
+            if ref is None:
+                ref = res
 
             style = dict(marker="o", markersize=4, color=COLORS.get(m), label=NICE.get(m, m.upper()),
                          linewidth=1.2, capsize=2)
             axes[0, col].errorbar(cx, eff,  eff_u,  **style)
             axes[1, col].errorbar(cx, res,  res_u,  **style)
+            #axes[1, col].errorbar(cx, res / ref,  res_u / ref,  **style)
+            #print(res / ref)
             axes[2, col].errorbar(cx, bias, bias_u, **style)
+            #axes[0, col].errorbar(cx, eff,  eff_u,  **style)
+            #axes[1, col].errorbar(cx, res,  res_u,  **style)
+            #axes[2, col].errorbar(cx, bias, bias_u, **style)
+            #axes[3, col].errorbar(cx, res / ref,  res_u,  **style)
+            #axes[4, col].errorbar(cx, res / ref,  res_u,  **style)
+            #axes[5, col].errorbar(cx, res / ref,  res_u,  **style)
             span["eff"]  += [v for v in eff  if v == v]
             eff_all      += [v for v in eff  if v == v]
             span["res"]  += [v for v in res  if v == v]
@@ -91,6 +104,7 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
                 lo, hi = min(vals), max(vals)
                 pad = 0.12 * (hi - lo) if hi > lo else max(abs(hi) * 0.1, 1e-6)
                 ax.set_ylim(lo - pad, hi + pad)
+                #ax.set_ylim(0.95, 1.05)
 
     # За замовчуванням (як на рисунках статті) вісь ефективності кожної панелі масштабується за її точками.
     # Якщо задано --eff-min, ефективність усіх панелей — на спільній осі [eff_min, 1.005].
@@ -141,7 +155,8 @@ def main():
     outdir = os.path.join(args.outdir, mode)
 
     # читаємо всі можливі методи
-    k4.METHODS = ["lkr", "lkrv2", "lkrv3", "lkrnn"]
+    #k4.METHODS = ["lkr", "lkrv2", "lkrv3", "lkrnn"]
+    k4.METHODS = ["lkr", "lkrv2", "lkrv3", "lkrnn", "lfkrnn"]
 
     loaded, names = [], []
     for ch in args.channels:
@@ -166,7 +181,8 @@ def main():
                [("+".join(names), k4.combine(loaded) if len(loaded) > 1 else loaded[0])]
 
     for label, a in datasets:
-        present = [m for m in ["lkrv2", "lkrv3", "lkrnn"]
+        #present = [m for m in ["lkrv2", "lkrv3", "lkrnn"]
+        present = [m for m in ["lkrv2", "lkrv3", "lkrnn", "lfkrnn"]
                    if f"mtt_{m}{'' if args.level == 'det' else '_gen'}" in a]
         tag_ch = f"_{label}" if args.per_channel else ""
 
@@ -179,6 +195,8 @@ def main():
 
         # у крос-тесті gen–det від det–det відрізняється лише LKRnn, тож за замовчуванням лише ця пара
         pairs = args.pairs or (["lkrnn"] if mode == "gennn" else present)
+        #pairs += ['lfkrnn', 'lkrnn']
+        #print(pairs)
         for m in pairs:
             if m not in present:
                 print(f"[W] {NICE.get(m, m)} відсутній у даних — пропущено "
@@ -187,7 +205,9 @@ def main():
             tag = f"_{label}" if args.per_channel else ""
             out = os.path.join(outdir, f"lkr_{m}{sfx}{tag}.pdf")
             make_figure(a, [BASE, m], args.level, out, tag=f", {label}", eff_min=args.eff_min, height=args.height)
-
+        if 1:
+            out = os.path.join(outdir, f"lfkrnn{sfx}{tag}.pdf")
+            make_figure(a, ['lkrnn', 'lfkrnn'], args.level, out, tag=f", {label}", eff_min=args.eff_min, height=args.height)
 
 if __name__ == "__main__":
     main()

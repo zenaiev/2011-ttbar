@@ -9,14 +9,14 @@ python weights.py; python weights.py --gen     # моделі .pt -> kinreco/nn_
 
 ## Прогін eventReco
 
-```fish
-./ttbarMakeHist config_test.txt    
+```fish # яка риба?
+./ttbarMakeHist config_test.txt    # а це навіщо?
 
 #Паралельно
 ./run_full_parallel.sh config_full_output.txt --nngen 0     
-for ch in 1 2 3
-    mv ttbar_output_full_$ch.root ttbar_output_det_$ch.root  
-end
+for ch in 1 2 3;
+    do mv ttbar_output_full_$ch.root ttbar_output_det_$ch.root  
+done
 
 ./test_gennn_det.sh                                          # крос-тест gen-моделі на det -> 
 ```
@@ -33,7 +33,7 @@ python3 integral_res.py --input-pattern 'ttbar_output_gennn_{ch}.root' --split-m
 ## Тренування мережі
 
 ```fish
-python train_solve_nn.py --level det --inputs ttbar_output_full_{1,2,3}.root   # -> solve_nn_output/
+python train_solve_nn.py --level det --inputs ttbar_output_det_{1,2,3}.root   # -> solve_nn_output/
 python train_solve_nn.py --level gen --inputs ttbar_output_full_{1,2,3}.root   # -> solve_nn_gen_output/
 python weights.py;
 python weights.py --gen; 

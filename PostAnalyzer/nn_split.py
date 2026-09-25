@@ -43,7 +43,8 @@ APPLY_INFO_KEY = "nn_apply_info"   # службовий запис nn_apply.py: 
 
 def uses_nn(method):
     """True для методів з нейромережею (lkrnn, lkrnn_gen) — лише їх обмежуємо eval_sample."""
-    return method.lower().startswith("lkrnn")
+    #return method.lower().startswith("lkrnn")
+    return method.lower().startswith("lkrnn") or method.lower().startswith("lfkrnn")
 
 
 def _names(level):

@@ -86,6 +86,8 @@ public :
    float mcBbar[4];    // anti-b four momentum
    float mcNu[4]; // nu four momentum
    float mcNubar[4]; // anti-nu four momentum
+   float mcWp[4]; // W+ four momentum
+   float mcWm[4]; // W- four momentum
 
    // List of branches (their names follow variable names with prefix b_)
    TBranch        *b_evRunNumber;   //!
@@ -138,6 +140,8 @@ public :
    TBranch        *b_mcBbar; //!
    TBranch        *b_mcNu; //!
    TBranch        *b_mcNubar; //!
+   TBranch        *b_mcWp; //!
+   TBranch        *b_mcWm; //!
 
    // constructor
    // argument: true for MC, false (default) for data
@@ -209,6 +213,8 @@ void ZTree::Init(TTree *tree)
       fChain->SetBranchAddress("mcBbar", mcBbar, &b_mcBbar);
       fChain->SetBranchAddress("mcNu", mcNu, &b_mcNu);
       fChain->SetBranchAddress("mcNubar", mcNubar, &b_mcNubar);
+      fChain->SetBranchAddress("mcWp", mcWp, &b_mcWp);
+      fChain->SetBranchAddress("mcWm", mcWm, &b_mcWm);
    }
 }
 
