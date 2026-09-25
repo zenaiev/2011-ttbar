@@ -123,6 +123,36 @@ class KRsolve(KR):
         self.z = ttbar[:,2]
         self.e = ttbar[:,3]
 
+class KRsolveDetJets(KR):
+    def __init__(self):
+        self.label = 'solve + det. jets'
+    def rec(self, data, mask):
+        ttbar = solve_lkrv3(p4(data['mcLp'][mask]), p4(data['mcLm'][mask]), data['mcNu'][mask][:,0] + data['mcNubar'][mask][:,0], data['mcNu'][mask][:,1] + data['mcNubar'][mask][:,1], p4(data['recoJ1'][mask]), p4(data['recoJ2'][mask]))
+        self.x = ttbar[:,0]
+        self.y = ttbar[:,1]
+        self.z = ttbar[:,2]
+        self.e = ttbar[:,3]
+
+class KRsolveDetMET(KR):
+    def __init__(self):
+        self.label = 'solve + det. MET'
+    def rec(self, data, mask):
+        ttbar = solve_lkrv3(p4(data['mcLp'][mask]), p4(data['mcLm'][mask]), data['recoMetPx'][mask], data['recoMetPy'][mask], p4(data['mcJ1'][mask]), p4(data['mcJ2'][mask]))
+        self.x = ttbar[:,0]
+        self.y = ttbar[:,1]
+        self.z = ttbar[:,2]
+        self.e = ttbar[:,3]
+
+class KRsolveDetLeptons(KR):
+    def __init__(self):
+        self.label = 'solve + det. leptons'
+    def rec(self, data, mask):
+        ttbar = solve_lkrv3(p4(data['recoLp'][mask]), p4(data['recoLm'][mask]), data['mcNu'][mask][:,0] + data['mcNubar'][mask][:,0], data['mcNu'][mask][:,1] + data['mcNubar'][mask][:,1], p4(data['mcJ1'][mask]), p4(data['mcJ2'][mask]))
+        self.x = ttbar[:,0]
+        self.y = ttbar[:,1]
+        self.z = ttbar[:,2]
+        self.e = ttbar[:,3]
+
 class KRReso(KR):
     def __init__(self):
         self.label = 'resolution'
@@ -268,9 +298,11 @@ class KRmcgennunubarze(KR):
 #krs = [LKRv3(), KRmcgen6(), KRMET(), KRLEP(), KRJETS(), KRJETSMET()]
 #krs = [LKRv3(), LKRv3CHECK()]
 #krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), KRJETS(), KRMET(), KRJETSMET(), KRLEP()]
-krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), LKRv3noResJets(), LKRv3noResMET(), LKRv3noResLeptons()]
+#krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), LKRv3noResJets(), LKRv3noResMET(), LKRv3noResLeptons()]
+#krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), KRsolveDetJets(), KRsolveDetMET(), KRsolveDetLeptons()]
+krs = [LKRv3CHECK(), KRsolve(), KRsolveDetJets(), KRsolveDetMET(), KRsolveDetLeptons()]
 
-fig, ax = plt.subplots(1, 3, figsize=(9, 6))
+fig, ax = plt.subplots(2, 3, figsize=(9, 6))
 #fig_h, ax_h = plt.subplots(1, 1, figsize=(9, 6))
 for ivar,var in enumerate(vars.keys()):
   mask = (data['lkrv3'] == 1) & (data[f'{var}_lkrv3'] > -9999.) & (data[f'{var}_lkrv3'] < 9999.)
@@ -298,14 +330,25 @@ for ivar,var in enumerate(vars.keys()):
         rmss[ikr].append(np.sqrt(np.mean(d**2)))
   #ax_h.set_yscale('log')
   #fig_h.savefig('tmp.pdf')
+  #print(rmss)
+  rmss.append([])
+  for ib,_ in enumerate(vars[var]['bins'][1:]):
+    for ikr,kr in enumerate(krs):
+      if ikr > 1:
+        tmp2 = np.maximum(rmss[ikr][ib]**2 - rmss[1][ib]**2, 0)
+        rmss[ikr][ib] = np.sqrt(tmp2)
+    rmss[len(krs)].append(np.sqrt(sum(rmss[ikr][ib]**2 for ikr in range(1, len(krs)))))
   for ikr,kr in enumerate(krs):
-    ax[ivar].plot(centers, rmss[ikr], 'o-', label=kr.label)
-    #ax[ivar].plot(centers, np.array(rmss[ikr])/np.array(rmss[0]), 'o-', label=kr.label)
+    ax[0, ivar].plot(centers, rmss[ikr], 'o-', label=kr.label)
+    ax[1, ivar].plot(centers, np.array(rmss[ikr]) / np.array(rmss[0]), 'o-', label=kr.label)
+    #ax[0, ivar].plot(centers, np.array(rmss[ikr])/np.array(rmss[1]), 'o-', label=kr.label)
     print(var, [float(f'{v:.1f}') for v in rmss[ikr]], kr.label)
-  ax[ivar].set_xlabel(f'${vars[var]["title"]}^{{gen}}${vars[var]["units"]}')
-  ax[ivar].set_ylabel(f'RMS {vars[var]["units"]}')
-  ax[ivar].set_ylim(0.,None)
-  ax[ivar].grid(True, alpha=0.3)
-ax[0].legend()
+  ax[0, ivar].plot(centers, rmss[len(krs)], 'o-', label='sum')
+  ax[1, ivar].plot(centers, np.array(rmss[len(krs)]) / np.array(rmss[0]), 'o-', label='sum')
+  ax[0, ivar].set_xlabel(f'${vars[var]["title"]}^{{gen}}${vars[var]["units"]}')
+  ax[0, ivar].set_ylabel(f'RMS {vars[var]["units"]}')
+  ax[0, ivar].set_ylim(0.,None)
+  ax[0, ivar].grid(True, alpha=0.3)
+ax[0, 0].legend()
 fig.tight_layout()
 fig.savefig('partial_krres_mtt.pdf')
