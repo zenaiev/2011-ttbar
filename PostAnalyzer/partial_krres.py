@@ -133,6 +133,16 @@ class KRsolveDetJets(KR):
         self.z = ttbar[:,2]
         self.e = ttbar[:,3]
 
+class KRsolveDetJetsMET(KR):
+    def __init__(self):
+        self.label = 'solve + det. jets+MET'
+    def rec(self, data, mask):
+        ttbar = solve_lkrv3(p4(data['mcLp'][mask]), p4(data['mcLm'][mask]), data['recoMetPx'][mask], data['recoMetPy'][mask], p4(data['recoJ1'][mask]), p4(data['recoJ2'][mask]))
+        self.x = ttbar[:,0]
+        self.y = ttbar[:,1]
+        self.z = ttbar[:,2]
+        self.e = ttbar[:,3]
+
 class KRsolveDetMET(KR):
     def __init__(self):
         self.label = 'solve + det. MET'
@@ -301,6 +311,7 @@ class KRmcgennunubarze(KR):
 #krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), LKRv3noResJets(), LKRv3noResMET(), LKRv3noResLeptons()]
 #krs = [LKRv3CHECK(), KRmcgen6(), KRsolve(), KRsolveDetJets(), KRsolveDetMET(), KRsolveDetLeptons()]
 krs = [LKRv3CHECK(), KRsolve(), KRsolveDetJets(), KRsolveDetMET(), KRsolveDetLeptons()]
+#krs = [LKRv3CHECK(), KRsolve(), KRsolveDetJets(), KRsolveDetJetsMET(), KRsolveDetMET(), KRsolveDetLeptons()]
 
 fig, ax = plt.subplots(2, 3, figsize=(9, 6))
 #fig_h, ax_h = plt.subplots(1, 1, figsize=(9, 6))
@@ -348,6 +359,7 @@ for ivar,var in enumerate(vars.keys()):
   ax[0, ivar].set_xlabel(f'${vars[var]["title"]}^{{gen}}${vars[var]["units"]}')
   ax[0, ivar].set_ylabel(f'RMS {vars[var]["units"]}')
   ax[0, ivar].set_ylim(0.,None)
+  #ax[1, ivar].set_ylim(0.99,1.01)
   ax[0, ivar].grid(True, alpha=0.3)
 ax[0, 0].legend()
 fig.tight_layout()
