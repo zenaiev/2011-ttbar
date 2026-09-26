@@ -58,9 +58,12 @@ def physical(reco, variable):
 
 
 def detect_methods(tree):
-    """Методи реконструкції, наявні у файлі."""
+    """Методи реконструкції, наявні у файлі, разом із дослідницькими моделями lkrnn* (nn_apply.py --study)."""
     keys = set(tree.keys())
-    return [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in keys]
+    base = [m for m in ["lkr", "lkrv2", "lkrv3", "lkrnn", "fkr", "skr"] if m in keys]
+    extra = sorted(k for k in keys if k.startswith("lkrnn") and k not in ("lkrnn", "lkrnn_gen")
+                   and not k.endswith("_gen") and f"mtt_{k}" in keys)
+    return base + extra
 
 
 def wrap_angle(r):
@@ -85,8 +88,8 @@ def calc_metrics(reco, gen, valid, variable):
 def binned_metrics(reco, gen, base_valid, passed, variable, bins, res_mask=None):
     """Ефективність (%) і roзд. здатність у кожному біні gen.
     Ефективність — на base_valid; res_mask (LKRnn: події поза тренуванням NN) обмежує лише roзд. здатність.
-    Повертає (effs, ress, знаменники ефективності, кількості подій для roзд. здатності)."""
-    effs, ress, ndens, nres = [], [], [], []
+    Повертає (effs, ress, знаменники ефективності, кількості подій для roзд. здатності, зсуви)."""
+    effs, ress, ndens, nres, biases = [], [], [], [], []
     valid = base_valid & passed
     phys = physical(reco, variable)
     for i in range(len(bins) - 1):
@@ -103,9 +106,11 @@ def binned_metrics(reco, gen, base_valid, passed, variable, bins, res_mask=None)
             if variable in ANGULAR:
                 r = wrap_angle(r)
             ress.append(np.sqrt(np.mean((r - r.mean()) ** 2)))
+            biases.append(float(r.mean()))
         else:
             ress.append(float("nan"))
-    return effs, ress, ndens, nres
+            biases.append(float("nan"))
+    return effs, ress, ndens, nres, biases
 
 
 def improvement(base, val):
@@ -120,16 +125,20 @@ def method_base(base, sample, method):
     return base & sample if nn_split.uses_nn(method) else base
 
 
-def print_integral(a, level, methods, base, sample):
+def print_integral(a, level, methods, base, sample, refs=("lkr", "lkrv3"), labels=None):
     suffix = "" if level == "det" else "_gen"
+    labels = labels or {m: m.upper() for m in methods}
     counts = []
+    w = max([7] + [len(labels[m]) for m in methods])
     print(f"\n{SEP}\nІНТЕГРАЛЬНО (весь діапазон), {level.upper()}-рівень\n{SEP}")
-    print(f"{'Змінна':<8} | {'Метод':<7} | {'N знам.':<8} | {'Еф. (%)':<9} | {'Bias':<11} | {'Resolution':<11} | "
+    print(f"{'Змінна':<8} | {'Метод':<{w}} | {'N знам.':<8} | {'Еф. (%)':<9} | {'Bias':<11} | {'Resolution':<11} | "
           f"{'vs LKR':<9} | {'vs LKRv3':<9}")
     print(SEP)
     for variable in VARS:
         gen_arr = a[f"{variable}_gen"]
         res_by = {}
+        for r in refs:                                       # еталони — навіть якщо їх не друкуємо
+            res_by[r] = calc_metrics(a[f"{variable}_{r}{suffix}"], gen_arr, base & (a[f"{r}{suffix}"] == 1), variable)[1]
         for m in methods:
             n_den = int(base.sum())
             valid = base & (a[f"{m}{suffix}"] == 1)              # ефективність — на всьому датасеті
@@ -139,15 +148,17 @@ def print_integral(a, level, methods, base, sample):
             res_by[m] = res
             counts.append((variable, m, n_ok, n_den))
             vs_lkr = improvement(res_by.get("lkr"), res) if m != "lkr" else "---"
-            vs_v3 = improvement(res_by.get("lkrv3"), res) if m not in ("lkr", "lkrv3") else "---"
-            print(f"{variable:<8} | {m.upper():<7} | {n_den:<8} | {eff:<9.2f} | {bias:<11.4f} | {res:<11.4f} | "
+            vs_v3 = improvement(res_by.get("lkrv3"), res) if m not in ("lkr", "lkrv2", "lkrv3") else "---"
+            print(f"{variable:<8} | {labels[m]:<{w}} | {n_den:<8} | {eff:<9.2f} | {bias:<11.4f} | {res:<11.4f} | "
                   f"{vs_lkr:<9} | {vs_v3:<9}")
         print("-" * len(SEP))
     return counts
 
 
-def print_binned(a, level, methods, base, sample):
+def print_binned(a, level, methods, base, sample, show_bias=False, show_eff=True, labels=None):
     suffix = "" if level == "det" else "_gen"
+    labels = labels or {m: m.upper() for m in methods}
+    w = max(10, max(len(labels[m]) for m in methods) + 5)         # спільна ширина колонок: назви не «з'їжджають»
     nn = [m for m in methods if nn_split.uses_nn(m)]
     print(f"\n{SEP}\nПО БІНАХ, {level.upper()}-рівень  (eff = N(reco)/N(знаменника) у біні, res = roзд. здатність;"
           f"\nN_bin — усі події (знаменник ефективності), N_res NN — події LKRnn поза тренуванням NN для res)\n{SEP}")
@@ -160,7 +171,11 @@ def print_binned(a, level, methods, base, sample):
         if nn:
             hdr += f" | {'N_res NN':<8}"
         for m in methods:
-            hdr += f" | {m.upper() + ' eff%':<10} | {m.upper() + ' res':<10}"
+            if show_eff:
+                hdr += f" | {labels[m] + ' eff%':<{w}}"
+            hdr += f" | {labels[m] + ' res':<{w}}"
+            if show_bias:
+                hdr += f" | {labels[m] + ' bias':<{w}}"
         print(f"\n--- {variable} ---\n{hdr}\n{'-' * len(hdr)}")
         centers = 0.5 * (bins[:-1] + bins[1:])
         for bi, c in enumerate(centers):
@@ -168,16 +183,22 @@ def print_binned(a, level, methods, base, sample):
             if nn:
                 row += f" | {per[nn[0]][3][bi]:<8}"
             for m in methods:
-                row += f" | {per[m][0][bi]:<10.2f} | {per[m][1][bi]:<10.4f}"
+                if show_eff:
+                    row += f" | {per[m][0][bi]:<{w}.2f}"
+                row += f" | {per[m][1][bi]:<{w}.4f}"
+                if show_bias:
+                    row += f" | {per[m][4][bi]:<+{w}.4f}"
             print(row)
 
 
-def print_counts(counts, level):
+def print_counts(counts, level, labels=None):
     print(f"\n{'=' * 60}\nКІЛЬКІСТЬ ПОДІЙ ({level}-рівень, сумарно)\n{'=' * 60}")
-    print(f"{'Змінна':<8} | {'Метод':<7} | {'N':<9} | {'Знаменник':<9}")
+    labels = labels or {m: m.upper() for _, m, _, _ in counts}
+    w = max([7] + [len(labels[m]) for _, m, _, _ in counts])
+    print(f"{'Змінна':<8} | {'Метод':<{w}} | {'N':<9} | {'Знаменник':<9}")
     print("-" * 60)
     for variable, m, n_ok, n_den in counts:
-        print(f"{variable:<8} | {m.upper():<7} | {n_ok:<9} | {n_den:<9}")
+        print(f"{variable:<8} | {labels[m]:<{w}} | {n_ok:<9} | {n_den:<9}")
 
 
 def read_arrays(filename):
@@ -217,6 +238,14 @@ def main():
     ap.add_argument("--all-events", dest="all_events", action="store_true",
                     help="LKRnn теж на всіх подіях, разом із тренувальними (лише для порівняння)")
     ap.add_argument("--no-binned", dest="no_binned", action="store_true", help="без виводу по бінах")
+    ap.add_argument("--binned-bias", dest="binned_bias", action="store_true",
+                    help="у таблиці по бінах додати колонку зсуву для кожного методу")
+    ap.add_argument("--label", action="append", default=[], metavar="МЕТОД=НАЗВА",
+                    help="своя коротка назва методу в таблицях, напр. --label lkrnnmlpl1zraw='MLP L1'")
+    ap.add_argument("--no-binned-eff", dest="binned_eff", action="store_false",
+                    help="не друкувати колонки ефективності в таблиці по бінах (у мереж вона однакова)")
+    ap.add_argument("--methods", nargs="+", default=None, metavar="МЕТОД",
+                    help="друкувати лише ці методи (напр. lkrnn lkrnnmlpl1z); «vs LKR» і «vs LKRv3» рахуються й так")
     args = ap.parse_args()
     split_model = args.split_model or args.level
 
@@ -240,6 +269,22 @@ def main():
         return
 
     a = combine_arrays(loaded)
+    suffix = "" if args.level == "det" else "_gen"
+    methods = [m for m in methods if f"{m}{suffix}" in a and f"mtt_{m}{suffix}" in a]   # напр. дослідницькі — лише det
+    refs = [m for m in ("lkr", "lkrv3") if m in methods]                    # еталони для колонок «vs LKR», «vs LKRv3»
+    if args.methods:
+        missing = [m for m in args.methods if m not in methods]
+        if missing:
+            raise SystemExit(f"[E] немає у файлах: {missing}; є: {methods}")
+        methods = list(args.methods)
+    labels = {m: m.upper() for m in methods}                                # за замовч. — назва гілки
+    labels.update(nn_split.short_method_labels(args.input_pattern.format(ch=args.channels[0])))
+    for s in args.label:                                                    # ручні назви мають перевагу
+        k, sep, v = s.partition("=")
+        if not sep:
+            raise SystemExit(f"[E] очікується МЕТОД=НАЗВА, отримано {s!r}")
+        labels[k] = v
+    full = nn_split.method_labels(args.input_pattern.format(ch=args.channels[0]))
     base = (a["reco_passed_selection"] == 1) if args.level == "det" else np.ones(len(a["mtt_gen"]), dtype=bool)
     sample = a["_sample"]
 
@@ -257,12 +302,15 @@ def main():
             print(f"  {CHANNEL_NAMES.get(ch, ch):<6} | {inf['n']:>9} | {inf['eligible']:>9} | {inf['trained']:>9} | "
                   f"{inf['test']:>8} | {inf['extra']:>12} | {inf['frac']:>8.4f}")
         print(f"  подій у вибірці для bias/res LKRnn: {int(sample.sum())} із {len(sample)}")
+    for m in methods:
+        if m in full:
+            print(f"  {labels[m]:<16} = {full[m]}  ({m})")
     print(SEP)
 
-    counts = print_integral(a, args.level, methods, base, sample)
+    counts = print_integral(a, args.level, methods, base, sample, refs, labels)
     if not args.no_binned:
-        print_binned(a, args.level, methods, base, sample)
-    print_counts(counts, args.level)
+        print_binned(a, args.level, methods, base, sample, args.binned_bias, args.binned_eff, labels)
+    print_counts(counts, args.level, labels)
 
 
 if __name__ == "__main__":

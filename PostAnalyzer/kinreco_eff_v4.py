@@ -40,6 +40,7 @@ LABELS = {
     "pttt": r"$p_T(t\bar{t})$ [GeV]",
     "ytt":  r"$y(t\bar{t})$",
 }
+UNITS = {"mtt": " [GeV]", "pttt": " [GeV]", "ytt": ""}      # одиниці роздільної здатності й зсуву
 # бінінг — як у kinreco_eff_v3.py (січнева презентація)
 BINS = {
     "mtt": np.concatenate((np.linspace(340, 450, 5, endpoint=False),
@@ -210,8 +211,8 @@ def make_plot(a, level, out_prefix, info="", outdir="plots"):
             pad = 0.1 * (hi - lo) if hi > lo else max(abs(hi) * 0.1, 1e-6)
             ax.set_ylim(lo - pad, hi + pad)
 
-        for ax, fig, ylabel in [(axs_res[k], fig_res, "Resolution"),
-                                 (axs_bias[k], fig_bias, "Bias"),
+        for ax, fig, ylabel in [(axs_res[k], fig_res, "Resolution" + UNITS[var]),
+                                 (axs_bias[k], fig_bias, "Bias" + UNITS[var]),
                                  (axs_eff[k], fig_eff, "Efficiency")]:
             ax.set_xlabel(LABELS[var]); ax.set_ylabel(ylabel)
             ax.grid(True); ax.legend()

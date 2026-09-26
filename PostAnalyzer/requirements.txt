@@ -1,0 +1,8 @@
+# Python-залежності проєкту (тренування NN + аналіз ROOT-виходу)
+# torch ставиться окремо з CUDA-індексу (див. README/нижче)
+uproot
+awkward
+numpy
+matplotlib
+scipy
+zuko            # normalizing flows (train_study.py --model flow)

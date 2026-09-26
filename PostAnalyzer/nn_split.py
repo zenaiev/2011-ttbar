@@ -61,8 +61,10 @@ def filter_keys(level):
     return keys
 
 
-def train_filter(a, level):
-    """Маска подій, придатних до тренування моделі рівня level ('det' або 'gen')."""
+def train_filter(a, level, mtt_base_range=None):
+    """Маска подій, придатних до тренування моделі рівня level ('det' або 'gen').
+    mtt_base_range — межі бази LKRv3; за замовчуванням нинішні MTT_BASE_RANGE, але для старих моделей
+    береться діапазон із їхніх міток (там нижня межа 300 ГеВ)."""
     sfx, fbr = _names(level)
     feats = a[fbr]
     f0 = (np.stack(feats) if feats.dtype == object else np.asarray(feats))[:, 0]
@@ -72,7 +74,7 @@ def train_filter(a, level):
     ok = (f0 != -999) & (a[f"lkrv3{sfx}"] == 1)          # заповнені ознаки й успішний LKRv3
     if level == "det":
         ok &= a["reco_passed_selection"] == 1               # лише події, що пройшли eventReco-відбір
-    lo, hi = MTT_BASE_RANGE
+    lo, hi = mtt_base_range or MTT_BASE_RANGE
     ok &= np.isfinite(mtt_lkr) & (mtt_lkr > lo) & (mtt_lkr < hi)
     ok &= np.isfinite(mtt_gen) & (mtt_gen > 0)
     # цілі мають бути скінченними (у тренуванні події з нефінітною ціллю відкидаються)
@@ -84,11 +86,11 @@ def train_filter(a, level):
 
 
 def split_file(model_dir):
-    """Шлях до файлу міток моделі."""
-    return os.path.join(model_dir, SPLIT_FILE)
+    """Шлях до файлу міток моделі (суфікс @оцінка дослідницького flow відкидається)."""
+    return os.path.join(model_dir.partition("@")[0], SPLIT_FILE)
 
 
-def write_split(path, origin, idx_train, idx_val, idx_test, level, extra_meta=None):
+def write_split(path, origin, idx_train, idx_val, idx_test, level, extra_meta=None, mtt_base_range=None):
     """Записує мітки датасету. origin — (N, 2): канал і номер запису ttbarTree кожної придатної події."""
     split = np.full(len(origin), -1, np.int8)
     split[idx_train], split[idx_val], split[idx_test] = LABELS["train"], LABELS["val"], LABELS["test"]
@@ -96,7 +98,7 @@ def write_split(path, origin, idx_train, idx_val, idx_test, level, extra_meta=No
         raise RuntimeError("не всі придатні події отримали мітку")
     ch, en = origin[:, 0].astype(np.int32), origin[:, 1].astype(np.int64)
     order = np.lexsort((en, ch))
-    meta = {"level": level, "labels": LABELS, "mtt_base_range": list(MTT_BASE_RANGE),
+    meta = {"level": level, "labels": LABELS, "mtt_base_range": list(mtt_base_range or MTT_BASE_RANGE),
             "fractions": list(SPLIT_FRACTIONS), "counts": {k: int((split == v).sum()) for k, v in LABELS.items()}}
     meta.update(extra_meta or {})
     with uproot.recreate(path) as f:
@@ -121,12 +123,11 @@ def split_masks(path, fname, channel, treename="ttbarTree"):
     Повертає (рівень тренування, кількість подій, маска придатних, {'train', 'val', 'test'})."""
     labels, meta = load_split(path)
     level = meta["level"]
-    if tuple(meta["mtt_base_range"]) != tuple(MTT_BASE_RANGE):
-        raise RuntimeError(f"{path}: модель тренувалась з базою LKRv3 у межах {tuple(meta['mtt_base_range'])}, "
-                           f"а поточний фільтр — {MTT_BASE_RANGE}; перетренуйте модель")
+    # фільтр беремо той, з яким модель тренувалася (у старих моделей база LKRv3 обрізана знизу 300 ГеВ)
+    rng = tuple(meta["mtt_base_range"])
     tree = uproot.open(fname)[treename]
     n = tree.num_entries
-    eligible = train_filter(tree.arrays(filter_keys(level), library="np"), level)
+    eligible = train_filter(tree.arrays(filter_keys(level), library="np"), level, rng)
     sel = labels["channel"] == channel
     ent, lab = labels["entry"][sel], labels["split"][sel]
     if len(ent) and ent.max() >= n:
@@ -139,8 +140,8 @@ def split_masks(path, fname, channel, treename="ttbarTree"):
     labelled = masks["train"] | masks["val"] | masks["test"]
     if int(labelled.sum()) != len(ent) or not np.array_equal(labelled, eligible):
         raise RuntimeError(f"{path}: мітки не відповідають подіям у {fname} (позначено {len(ent)}, придатних "
-                           f"{int(eligible.sum())}, розбіжностей {int((labelled != eligible).sum())}) — модель "
-                           "натренована на інших файлах eventReco або з іншим фільтром")
+                           f"{int(eligible.sum())}, розбіжностей {int((labelled != eligible).sum())}, межі бази "
+                           f"LKRv3 {rng}) — модель натренована на інших файлах eventReco або з іншим фільтром")
     return level, n, eligible, masks
 
 
@@ -150,6 +151,66 @@ def apply_info(fname):
         return json.loads(str(uproot.open(fname)[APPLY_INFO_KEY]))
     except (KeyError, ValueError, TypeError):
         return None
+
+
+def study_label(s):
+    """Короткий підпис дослідницької моделі для рисунків, напр. 'MLP (raw)' чи 'MLP (raw, flat M)'."""
+    kind = {"mlp": "MLP", "flow": "Flow"}.get(s.get("model_type") or s.get("model"), "NN")
+    parts = [s.get("inputs", "?")]
+    if s.get("estimator"):
+        parts.append(s["estimator"])
+    if s.get("target") == "residual":
+        parts.append("resid.")
+    if s.get("loss") and s["loss"] != "nll":                   # для MLP завжди L1/L2, для flow лос не показуємо
+        parts.append(s["loss"].upper())
+    if s.get("flat"):
+        parts.append("flat " + "+".join({"mtt": "M", "pttt": "pT", "ytt": "y"}.get(v, v) for v in s["flat"]))
+    if s.get("bound"):
+        parts.append("bounded")
+    if s.get("augment_z"):
+        parts.append("z-aug")
+    if s.get("calibrated"):
+        a = s.get("cal_alpha")
+        parts.append("cal" if a is None or a == 1.0 else f"cal {a:g}")
+    return f"{kind} ({', '.join(parts)})"
+
+
+def short_label(s):
+    """Стисла назва дослідницької моделі для таблиць: «MLP L1 z», «Flow mean z», «MLP L1 z c0.4»."""
+    kind = {"mlp": "MLP", "flow": "Flow"}.get(s.get("model_type") or s.get("model"), "NN")
+    parts = [kind, s.get("estimator") or (s.get("loss") or "").upper()]
+    if s.get("target") == "residual":
+        parts.append("res")
+    if s.get("bound"):
+        parts.append("bnd")
+    if s.get("augment_z"):
+        parts.append("z")
+    if s.get("calibrated"):
+        a = s.get("cal_alpha")
+        parts.append("cal" if a is None or a == 1.0 else f"c{a:g}")
+    return " ".join(p for p in parts if p)
+
+
+def short_method_labels(fname):
+    """{назва гілки: стисла назва} для таблиць (порожньо для файлів від C++)."""
+    info = apply_info(fname) or {}
+    out, used = {}, {}
+    for name, s in sorted((info.get("studies") or {}).items()):
+        lab = short_label(s)
+        used[lab] = used.get(lab, 0) + 1
+        out[name] = lab if used[lab] == 1 else f"{lab} #{used[lab]}"
+    return out
+
+
+def method_labels(fname):
+    """{назва гілки: підпис} для дослідницьких моделей у файлі від nn_apply.py (порожньо для файлів C++)."""
+    info = apply_info(fname) or {}
+    labels, used = {}, {}
+    for name, s in sorted((info.get("studies") or {}).items()):
+        lab = study_label(s)
+        used[lab] = used.get(lab, 0) + 1
+        labels[name] = lab if used[lab] == 1 else f"{lab} #{used[lab]}"
+    return labels
 
 
 def eval_sample(fname, channel, model_level, split_path=None, seed=SPLIT_SEED, treename="ttbarTree"):

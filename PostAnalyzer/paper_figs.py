@@ -17,6 +17,8 @@ bias і роздільна здатність LKRnn — лише на подія
 Запуск:
   python3 paper_figs.py                          # усі доступні пари, канали 1+2+3
   python3 paper_figs.py --pairs lkrv2 lkrv3      # лише ці пари
+  python3 paper_figs.py --ref lkrnn --pairs lkrnnmlpraw04          # пара «LKRnn проти MLP» (lkrnn_lkrnnmlpraw04.pdf)
+  python3 paper_figs.py --compare lkr lkrnn lkrnnmlpraw04 --only-compare   # один рисунок із цими методами
   python3 paper_figs.py --channels 3             # один канал
   python3 paper_figs.py --level gen              # генераторний рівень
 """
@@ -28,6 +30,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import uproot
+
 import kinreco_eff_v4 as k4
 import nn_split
 
@@ -37,6 +41,9 @@ NICE = {"lkr": "LKR", "lkrv2": "LKRv2", "lkrv3": "LKRv3", "lkrnn": "LKRnn",
         "fkr": "FKR", "skr": "SKR"}
 COLORS = {"lkr": "tab:blue", "lkrv2": "tab:red", "lkrv3": "tab:orange",
           "lkrnn": "tab:green", "fkr": "tab:purple", "skr": "tab:brown"}
+LINESTYLES = {}                     # метод -> стиль лінії (--linestyle); не суцільні — з порожніми маркерами
+LEGEND_TOP = False                  # --legend-top: одна спільна легенда над рисунком замість легенд у панелях
+EXTRA_COLORS = ["tab:purple", "tab:brown", "tab:pink", "tab:olive", "tab:cyan", "tab:gray", "black"]
 
 
 def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
@@ -47,7 +54,7 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
 
     eff_all = []          # ефективність з усіх панелей -> спільна вісь Y
     fig, axes = plt.subplots(3, len(VARS), figsize=(13, height))
-    fig.subplots_adjust(left=0.08, right=0.98, top=0.95, bottom=0.07,
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.93 if LEGEND_TOP else 0.95, bottom=0.07,
                         wspace=0.28, hspace=0.28)
 
     for col, var in enumerate(VARS):
@@ -63,8 +70,11 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
             cx, eff, eff_u, bias, bias_u, res, res_u = k4.calc_bin_metrics(
                 reco, gen, valid, base_all, k4.BINS[var], var, res_mask)
 
+            ls = LINESTYLES.get(m, "-")
             style = dict(marker="o", markersize=4, color=COLORS.get(m), label=NICE.get(m, m.upper()),
-                         linewidth=1.2, capsize=2)
+                         linewidth=1.2, capsize=2, linestyle=ls)
+            if ls != "-":
+                style["markerfacecolor"] = "white"
             axes[0, col].errorbar(cx, eff,  eff_u,  **style)
             axes[1, col].errorbar(cx, res,  res_u,  **style)
             axes[2, col].errorbar(cx, bias, bias_u, **style)
@@ -74,14 +84,15 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
             span["bias"] += [v for v in bias if v == v]
 
         for row, (key, ylab) in enumerate([("eff", "Efficiency"),
-                                           ("res", "Resolution"),
-                                           ("bias", "Bias")]):
+                                           ("res", "Resolution" + k4.UNITS[var]),
+                                           ("bias", "Bias" + k4.UNITS[var])]):
             ax = axes[row, col]
             ax.set_xlabel(k4.LABELS[var], fontsize=11)
             ax.set_ylabel(ylab, fontsize=11)
             ax.grid(True, alpha=0.4)
             ax.tick_params(labelsize=9)
-            if col == 0:
+            ax.ticklabel_format(axis="y", useOffset=False)       # без «+1» / «1e-5+…» над віссю (ефективність ≈ 1)
+            if col == 0 and not LEGEND_TOP:
                 ax.legend(fontsize=9)
             # масштаб за значеннями, не за (роздутими у хвостах) похибками
             vals = span[key]
@@ -99,6 +110,10 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
         for c in range(len(VARS)):
             axes[0, c].set_ylim(lo, 1.005)
 
+    if LEGEND_TOP:                  # поза панелями: легенда не може закрити жодної кривої
+        handles, labels = axes[0, 0].get_legend_handles_labels()
+        fig.legend(handles, labels, loc="upper center", ncol=min(len(labels), 4), frameon=False, fontsize=11,
+                   bbox_to_anchor=(0.5, 0.995), handlelength=3)
     os.makedirs(os.path.dirname(out_pdf) or ".", exist_ok=True)
     fig.savefig(out_pdf)
     fig.savefig(out_pdf.replace(".pdf", ".png"), dpi=150)
@@ -133,6 +148,20 @@ def main():
                     help="висота фігури в дюймах (ширина 13); за замовч. 9.5 — як на рисунках статті")
     ap.add_argument("--only-summary", action="store_true",
                     help="лише зведена фігура з усіма методами, без попарних")
+    ap.add_argument("--ref", default=BASE,
+                    help="з чим порівнювати в попарних рисунках (за замовч. lkr; напр. lkrnn -> lkrnn_<метод>.pdf)")
+    ap.add_argument("--compare", nargs="+", default=None, metavar="МЕТОД",
+                    help="окремий рисунок із саме цими методами, у цьому порядку (cmp_<методи>.pdf)")
+    ap.add_argument("--only-compare", dest="only_compare", action="store_true",
+                    help="лише рисунок --compare, без попарних")
+    ap.add_argument("--label", action="append", default=[], metavar="МЕТОД=ПІДПИС",
+                    help="свій підпис методу в легенді, напр. --label lkrnnfree='LKRnn без обмеження'; можна кілька разів")
+    ap.add_argument("--color", action="append", default=[], metavar="МЕТОД=КОЛІР",
+                    help="свій колір методу, напр. --color lkrnnmlpl1z='#e377c2'; можна кілька разів")
+    ap.add_argument("--legend-top", dest="legend_top", action="store_true",
+                    help="одна спільна легенда над рисунком (не закриває кривих) замість легенд у панелях")
+    ap.add_argument("--linestyle", action="append", default=[], metavar="МЕТОД=СТИЛЬ",
+                    help="стиль лінії методу (matplotlib: -, --, :, -.), напр. --linestyle lkrnnfree=--")
     args = ap.parse_args()
     # режим -> окрема папка й суфікс імені: det–det, gen–gen, gen–det (крос-тест gen-моделі на файлах з krNNGen 1)
     split_model = args.split_model or args.level
@@ -140,8 +169,24 @@ def main():
     sfx = {"det": "", "gen": "_gen", "gennn": "_gennn"}[mode]
     outdir = os.path.join(args.outdir, mode)
 
-    # читаємо всі можливі методи
-    k4.METHODS = ["lkr", "lkrv2", "lkrv3", "lkrnn"]
+    # читаємо всі можливі методи, разом із дослідницькими моделями lkrnn* (nn_apply.py --study)
+    first = next((args.input_pattern.format(ch=ch) for ch in args.channels
+                  if os.path.exists(args.input_pattern.format(ch=ch))), None)
+    keys = set(uproot.open(first)["ttbarTree"].keys()) if first else set()
+    study = sorted(k for k in keys if k.startswith("lkrnn") and k not in ("lkrnn", "lkrnn_gen")
+                   and not k.endswith("_gen") and f"mtt_{k}" in keys)
+    for i, m in enumerate(study):
+        COLORS.setdefault(m, EXTRA_COLORS[i % len(EXTRA_COLORS)])
+    NICE.update(nn_split.method_labels(first) if first else {})     # короткі підписи, напр. "MLP (raw)"
+    global LEGEND_TOP
+    LEGEND_TOP = args.legend_top
+    for spec, target in ((args.label, NICE), (args.color, COLORS), (args.linestyle, LINESTYLES)):  # ручні мають перевагу
+        for s in spec:
+            k, sep, v = s.partition("=")
+            if not sep:
+                raise SystemExit(f"[E] очікується МЕТОД=ЗНАЧЕННЯ, отримано {s!r}")
+            target[k] = v
+    k4.METHODS = ["lkr", "lkrv2", "lkrv3", "lkrnn"] + study
 
     loaded, names = [], []
     for ch in args.channels:
@@ -166,9 +211,21 @@ def main():
                [("+".join(names), k4.combine(loaded) if len(loaded) > 1 else loaded[0])]
 
     for label, a in datasets:
-        present = [m for m in ["lkrv2", "lkrv3", "lkrnn"]
+        present = [m for m in ["lkrv2", "lkrv3", "lkrnn"] + study
                    if f"mtt_{m}{'' if args.level == 'det' else '_gen'}" in a]
         tag_ch = f"_{label}" if args.per_channel else ""
+
+        available = [BASE] + present
+        if args.compare:
+            missing = [m for m in args.compare if m not in available]
+            if missing:
+                raise SystemExit(f"[E] немає у файлах: {missing}; є: {available}")
+            out = os.path.join(outdir, f"cmp_{'_'.join(args.compare)}{sfx}{tag_ch}.pdf")
+            make_figure(a, list(args.compare), args.level, out, tag=f", {label}", eff_min=args.eff_min, height=args.height)
+            if args.only_compare:
+                continue
+        if args.ref not in available:
+            raise SystemExit(f"[E] --ref {args.ref}: немає у файлах; є: {available}")
 
         # зведена фігура: базовий LKR + усі наявні варіанти на одних осях
         if args.summary or args.only_summary:
@@ -180,13 +237,15 @@ def main():
         # у крос-тесті gen–det від det–det відрізняється лише LKRnn, тож за замовчуванням лише ця пара
         pairs = args.pairs or (["lkrnn"] if mode == "gennn" else present)
         for m in pairs:
+            if m == args.ref:
+                continue
             if m not in present:
                 print(f"[W] {NICE.get(m, m)} відсутній у даних — пропущено "
                       f"(увімкніть kr_{NICE.get(m, m).upper()} у конфізі та перезапустіть eventReco)")
                 continue
             tag = f"_{label}" if args.per_channel else ""
-            out = os.path.join(outdir, f"lkr_{m}{sfx}{tag}.pdf")
-            make_figure(a, [BASE, m], args.level, out, tag=f", {label}", eff_min=args.eff_min, height=args.height)
+            out = os.path.join(outdir, f"{args.ref}_{m}{sfx}{tag}.pdf")
+            make_figure(a, [args.ref, m], args.level, out, tag=f", {label}", eff_min=args.eff_min, height=args.height)
 
 
 if __name__ == "__main__":
