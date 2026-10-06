@@ -38,17 +38,18 @@ for ilabel,label in enumerate(labels):
 
   br = 0.046
   lumi = 2500.0
+  eff = 0.25
   #xsec13 = 850.
   xsec = 165.6
   #w_data = lumi / 54990752. * xsec * br
-  excess1 = 6.49 / 4.
+  excess1 = 6.49 / 5.
   excess = np.zeros_like(proj_x)
   excess[0] = excess1
   #print(proj_x_topo / proj_x)
 
-  pred_x = proj_x / np.sum(proj_x) * lumi * xsec * br
+  pred_x = proj_x / np.sum(proj_x) * xsec * lumi * br * eff
   pred_y = arr_norm.T @ pred_x
-  pred_x_topo = (pred_x / np.sum(pred_x) * xsec + excess)  * lumi * br
+  pred_x_topo = (pred_x / np.sum(pred_x) * xsec + excess)  * lumi * br * eff
   pred_y_topo = arr_norm.T @ pred_x_topo
   #print(pred_y - proj_y)
   ratio = (pred_y/np.sum(pred_y)) / (proj_y/np.sum(proj_y))
@@ -72,9 +73,9 @@ for ilabel,label in enumerate(labels):
     axs[0, ilabel].set_ylabel('Expected events')
     axs[1, ilabel].set_ylabel('Ratio to MC')
   axs[0, ilabel].set_xlim(340, 450)
-  axs[0, ilabel].set_ylim(0, 250)
+  axs[0, ilabel].set_ylim(0, 70)
   axs[0, ilabel].set_title(label.split('_')[-1])
-  axs[1, ilabel].set_ylim(0.5, 1.5)
+  axs[1, ilabel].set_ylim(0., 2.)
   axs[1, ilabel].legend(title = fr'$\chi^{2} = {chi2:.2f}$ $({sigma:.2f}\sigma)$')
 axs[0, -1].legend(title = r'Dilepton $t\bar{t}$, $\sqrt{s} = 7$ TeV')
 fig.tight_layout()
