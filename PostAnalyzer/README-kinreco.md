@@ -42,16 +42,24 @@ python weights.py --gen;
 python nn_apply.py --check 'ttbar_output_det_{ch}.root'                       # звірити ваги без перекомпіляції
 ```
 
-## Найкращі моделі: MLP і Flow
+## Найкращі моделі: MLP, Flow і LKRnn unbounded
+
+Еталонні натреновані моделі лежать у репозиторії: `models/mlp`, `models/flow`, `models/lkrnn_unbound`
+(у кожній папці `study_model.pt`, `study_config.json`, `calibration*.json` і `dataset_split.root`).
+Перетренування пише в `models/retrained/`, тож еталон не перетирається; крім того, `train_study.py`
+відмовляється писати в папку, де вже є модель (перезапис — лише з `--force`).
 
 ```fish
-./train_best.sh                       # MLP і Flow, сід 42 -> studies/models/best/{mlp,flow}
+./train_best.sh                       # MLP і Flow, сід 42 -> models/retrained/{mlp,flow}
+./train_best.sh lkrnn                 # LKRnn unbounded -> models/retrained/lkrnn_unbound; all — усі три
+./train_best.sh gen                   # MLP і Flow на gen-рівні (raw_mlj, --jet-order pt) -> models/retrained/{mlp,flow}_gen
 ./train_best.sh mlp                   # лише MLP (~3 хв на GPU); ./train_best.sh flow — лише Flow (~15 хв)
 SEEDS="42 1 2 3 4" ./train_best.sh    # кілька сідів -> mlp, mlp_s1, ... (розкид між тренуваннями)
 EPOCHS=1 OUTDIR=/tmp/t ./train_best.sh   # швидка перевірка, що все запускається
 ```
 
-Обидві моделі передбачають M, pT, y системи tt̄ напряму (без бази LKRv3), вхід — 24 числа: 4-вектори
+MLP і Flow передбачають M, pT, y системи tt̄ напряму (без бази LKRv3); LKRnn unbounded — той самий MLP,
+але передбачає поправку до розв'язку LKRv3 без обмеження її величини. Вхід усіх трьох — 24 числа: 4-вектори
 l⁻, l⁺ і двох jets, вибраних LKRv3, MET (px, py), дискримінанти CSV цих двох jets і маси m(l⁺j₁), m(l⁺j₂),
 m(l⁻j₁), m(l⁻j₂). MLP — лос L1; Flow — normalizing flow, точкова оцінка — середнє розподілу. Потрібні
 `ttbar_output_full_{1,2,3}.root` і `ntuples-mc/`: з них скрипт одноразово будує файл-супутник із CSV
@@ -65,9 +73,12 @@ m(l⁻j₁), m(l⁻j₂). MLP — лос L1; Flow — normalizing flow, точк
 ```fish
 python nn_apply.py --input-pattern 'ttbar_output_det_{ch}.root' --output-pattern 'ttbar_output_best_{ch}.root' \
     --det-model keep --gen-model keep \
-    --study studies/models/best/mlp:lkrnnmlp --study studies/models/best/flow:lkrnnflow
-python3 integral_res.py --input-pattern 'ttbar_output_best_{ch}.root' --methods lkr lkrnn lkrnnmlp lkrnnflow
+    --study models/mlp:lkrnnmlp --study models/flow@mean:lkrnnflow --study models/lkrnn_unbound:lkrnnfreeraw
+python3 integral_res.py --input-pattern 'ttbar_output_best_{ch}.root' --methods lkr lkrnnfreeraw lkrnnmlp lkrnnflow
 python fold_check.py --input-pattern 'ttbar_output_best_{ch}.root'
+python response_matrix.py --input-pattern 'ttbar_output_best_{ch}.root'   # матриця відгуку й cond(A)
+# розкид між сідами (SEEDS="42 1 2 3 4" ./train_best.sh, кожен сід — окрема гілка nn_apply):
+# python seed_metrics.py --input-pattern ... --group "MLP=lkrnnmlp,lkrnnmlps1,lkrnnmlps2,lkrnnmlps3,lkrnnmlps4"
 ```
 
 Як це працює:

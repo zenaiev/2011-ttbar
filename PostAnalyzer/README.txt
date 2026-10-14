@@ -1,3 +1,6 @@
+Розширення цього коду (кінематична реконструкція LKR/LKRv2/LKRv3/LKRnn, тренування
+нейромережі, аналіз і рисунки) описано окремо: README-kinreco.md
+
 This part processes ROOT ntuples (output of Analyzer, see 
 Analyzer/README.txt) to produce ROOT histograms (ttbarMakeHist.cxx) 
 and final plots and numbers from them (ttbarMakePlots.cxx).

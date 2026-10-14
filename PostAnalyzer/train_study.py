@@ -40,7 +40,13 @@ train_study.py
 Регуляризація:
   --augment-z   відображення z -> −z для половини подій батчу: pp-зіткнення симетричні вздовж пучка, тож
                 подія з протилежними pz усіх об'єктів і −y така ж правдоподібна (M і pT не змінюються);
-  --dropout p   (flow) dropout між стволом і контекстом.
+  --dropout p   (flow) dropout між стволом і контекстом; (mlp --arch plain) dropout після кожного шару.
+
+Архітектура MLP (--arch):
+  res    (за замовч.) вхідний шар + residual-блоки з LayerNorm і SiLU, як у LKRnn;
+  plain  звичайний повнозв'язний MLP, як у Rübenach (CERN-THESIS-2023-066, model_tt.py): --blocks шарів по
+         --dim вузлів, ReLU і dropout після кожного, без нормування шарів і skip-зв'язків
+         (у них: --dim 800 --blocks 3 --dropout 0.25, лос MSE, Adam lr 1e-3, батч 8192).
 
 Поділ датасету той самий, що в LKRnn (той самий фільтр, SEED і частки), тож тестові події однакові.
 --seed змінює лише ініціалізацію ваг, порядок батчів і аугментацію — поділ датасету від нього не
@@ -135,6 +141,10 @@ def model_inputs(feats, cfg, extra=None):
         x = np.concatenate([x, extra if cols is None else extra[:, cols]], axis=1)
     if cfg["inputs"] in MLJ_INPUTS:                      # маси інваріантні до поворотів і z -> −z
         x = np.concatenate([x, lepton_jet_masses(feats, MLJ_INPUTS[cfg["inputs"]])], axis=1)
+    if cfg.get("jet_order") == "pt":                     # j₁ — м'якший jet (як здебільшого після LKRv3 на det)
+        hard1 = np.hypot(feats[:, 9], feats[:, 10]) > np.hypot(feats[:, 13], feats[:, 14])
+        x = np.array(x, dtype=np.float32)                # копія: x може бути зрізом feats
+        x[hard1] = x[hard1][:, swap_permutation(cfg["inputs"], x.shape[1])]
     return np.ascontiguousarray(x, dtype=np.float32)
 
 
@@ -164,18 +174,43 @@ def augment_columns(inputs):
     return rot, flip
 
 
+def swap_permutation(inputs, x_dim):
+    """Перестановка стовпців входу, що міняє місцями j₁ і j₂ (4-вектори, CSV, маси M(lj)).
+    Потрібна для --augment-swap: на gen-рівні порядок jets збігається з зарядом b-кварків (j₂ — з того самого
+    топа, що l⁺), на детекторі — ні; перестановка забирає в мережі цю «підказку». Для features* неможлива:
+    серед 26 ознак є лише M(l⁺j₁) і M(l⁻j₂), без їхніх «пар» після перестановки."""
+    if inputs.startswith("features") or extra_kind({"inputs": inputs}) == "pair" or \
+            (inputs.endswith("_extra") and inputs not in EXTRA_COLS):
+        raise SystemExit(f"[E] --augment-swap для входу {inputs} не підтримується")
+    perm = list(range(x_dim))
+    perm[8:12], perm[12:16] = list(range(12, 16)), list(range(8, 12))      # j₁ <-> j₂
+    if inputs in EXTRA_COLS:                                               # CSV j₁ <-> CSV j₂
+        perm[N_RAW], perm[N_RAW + 1] = N_RAW + 1, N_RAW
+    if inputs in MLJ_INPUTS:                                               # M(l+j1)<->M(l+j2), M(l-j1)<->M(l-j2)
+        m = x_dim - len(MLJ_INPUTS[inputs])
+        perm[m:m + 4] = [m + 1, m, m + 3, m + 2]
+    return perm
+
+
 class StudyMLP(nn.Module):
     """MLP (як у LKRnn: вхідний шар + residual-блоки) з нормуванням входу й цілі всередині моделі."""
 
-    def __init__(self, in_dim, out_dim=3, dim=128, blocks=3, bound=None):
+    def __init__(self, in_dim, out_dim=3, dim=128, blocks=3, bound=None, arch="res", dropout=0.0):
         super().__init__()
         self.bound = None if bound is None else torch.tensor(bound, dtype=torch.float32)
         self.register_buffer("x_mean", torch.zeros(in_dim))
         self.register_buffer("x_std", torch.ones(in_dim))
         self.register_buffer("y_mean", torch.zeros(out_dim))
         self.register_buffer("y_std", torch.ones(out_dim))
-        self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
-        self.blocks = nn.Sequential(*[ResBlock(dim) for _ in range(blocks)])
+        if arch == "plain":                            # Dense(dim, ReLU) + Dropout, blocks разів (Rübenach)
+            layers = []
+            for k in range(blocks):
+                layers += [nn.Linear(in_dim if k == 0 else dim, dim), nn.ReLU(), nn.Dropout(dropout)]
+            self.input_proj = nn.Identity()
+            self.blocks = nn.Sequential(*layers)
+        else:
+            self.input_proj = nn.Sequential(nn.Linear(in_dim, dim), nn.LayerNorm(dim), nn.SiLU())
+            self.blocks = nn.Sequential(*[ResBlock(dim) for _ in range(blocks)])
         self.head = nn.Linear(dim, out_dim)
         if bound is not None:                          # як SolveMLP у LKRnn: старт із нульової поправки
             nn.init.zeros_(self.head.weight)
@@ -292,10 +327,13 @@ def split_spec(model_dir):
 
 
 def make_targets(y_res, lkr, target):
-    """y_res — поправки до LKRv3 з load_and_prepare; для direct додаємо назад базу LKRv3."""
+    """y_res — поправки до LKRv3 з load_and_prepare; для direct додаємо назад базу LKRv3.
+    lkrv3 — сам розв'язок LKRv3 замість правди (перевірка, чи мережа відтворює аналітичний алгоритм)."""
     if target == "residual":
         return y_res.astype(np.float32)
     base = np.stack([np.log(lkr[:, 0]), np.log(lkr[:, 1] + 1.0), lkr[:, 2]], axis=1)
+    if target == "lkrv3":
+        return base.astype(np.float32)
     return (y_res + base).astype(np.float32)
 
 
@@ -410,6 +448,12 @@ def auto_outdir(cfg):
         name += "_noaug"
     if cfg.get("augment_z"):
         name += "_z"
+    if cfg.get("augment_swap"):
+        name += "_swap"
+    if cfg.get("jet_order"):
+        name += f"_order{cfg['jet_order']}"
+    if cfg.get("arch", "res") != "res":
+        name += f"_{cfg['arch']}"
     if cfg.get("dropout"):
         name += f"_do{cfg['dropout']:g}"
     if cfg.get("level", "det") == "gen":
@@ -427,7 +471,8 @@ def load_study(model_dir, device="cpu"):
     if cfg["model"] == "mlp":
         if est:
             raise RuntimeError(f"{model_dir}: суфікс @{est} має сенс лише для flow")
-        m = StudyMLP(cfg["in_dim"], dim=cfg["dim"], blocks=cfg["blocks"], bound=cfg.get("bound"))
+        m = StudyMLP(cfg["in_dim"], dim=cfg["dim"], blocks=cfg["blocks"], bound=cfg.get("bound"),
+                     arch=cfg.get("arch", "res"), dropout=cfg.get("dropout", 0.0))
         m.load_state_dict(ck["state_dict"])
     elif cfg["model"] == "flow":
         m = StudyFlow(cfg["in_dim"], dim=cfg["dim"], blocks=cfg["blocks"], ctx=cfg["ctx"], transforms=cfg["transforms"],
@@ -446,7 +491,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", choices=["mlp", "flow"], default="mlp")
     ap.add_argument("--inputs", choices=INPUTS, required=True)
-    ap.add_argument("--target", choices=["direct", "residual"], required=True)
+    ap.add_argument("--target", choices=["direct", "residual", "lkrv3"], required=True,
+                    help="direct — (ln M, ln(pT+1), y) правди; residual — поправка до LKRv3; "
+                         "lkrv3 — сам розв'язок LKRv3 як ціль (перевірка відтворення алгоритму)")
     ap.add_argument("--loss", choices=["l2", "l1"], default="l2")
     ap.add_argument("--loss-weights", dest="loss_weights", type=float, nargs=3, default=[1.0, 1.0, 1.0],
                     help="ваги M, pT, y у лосі (у нормованому масштабі цілі)")
@@ -460,6 +507,7 @@ def main():
                     default=["ttbar_output_full_1.root", "ttbar_output_full_2.root", "ttbar_output_full_3.root"],
                     help="вихід eventReco для тренування (ознаки й база LKRv3 від мережі не залежать)")
     ap.add_argument("--outdir", default=None, help="за замовчуванням studies/models/<назва за конфігом>")
+    ap.add_argument("--force", action="store_true", help="перезаписати модель, якщо в --outdir вона вже є")
     ap.add_argument("--epochs", type=int, default=400)
     ap.add_argument("--patience", type=int, default=40)
     ap.add_argument("--batch", type=int, default=4096)
@@ -468,9 +516,17 @@ def main():
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--blocks", type=int, default=3)
     ap.add_argument("--no-augment", dest="augment", action="store_false", help="без азимутальної аугментації")
+    ap.add_argument("--augment-swap", dest="augment_swap", action="store_true",
+                    help="у половини подій батчу міняти місцями j₁ і j₂ (разом із CSV і масами M(lj))")
+    ap.add_argument("--jet-order", dest="jet_order", choices=["pt"], default=None,
+                    help="pt — упорядкувати j₁, j₂ за pT (j₁ м'якший) на вході моделі; на gen-рівні прибирає "
+                         "збіг порядку jets із зарядом b-кварків (j₁ = b̄, j₂ = b), на det це вже так у ~92%% подій")
     ap.add_argument("--augment-z", dest="augment_z", action="store_true",
                     help="відображення z -> −z для половини подій батчу (pz усіх об'єктів і знак y)")
-    ap.add_argument("--dropout", type=float, default=0.0, help="flow: dropout між стволом і контекстом")
+    ap.add_argument("--dropout", type=float, default=0.0,
+                    help="flow: dropout між стволом і контекстом; mlp --arch plain: після кожного шару")
+    ap.add_argument("--arch", choices=["res", "plain"], default="res",
+                    help="MLP: res — residual-блоки (як LKRnn); plain — Dense+ReLU+Dropout (як Rübenach)")
     ap.add_argument("--bound", type=float, nargs=3, default=None, metavar=("M", "PT", "Y"),
                     help="MLP з --target residual: обмежити поправку tanh(·)·bound, як у LKRnn (0.05 0.20 0.05)")
     ap.add_argument("--ctx", type=int, default=64, help="flow: розмір вектора контексту")
@@ -478,7 +534,7 @@ def main():
     ap.add_argument("--flow-hidden", dest="flow_hidden", type=int, default=128, help="flow: ширина шарів кондиціонера")
     ap.add_argument("--bins", type=int, default=8, help="flow: вузлів сплайна")
     ap.add_argument("--samples", type=int, default=64,
-                    help="flow: вибірок на подію для середнього/медіани (64 дають похибку медіани ~0.5% маси, середнього ~0.05%)")
+                    help="flow: вибірок на подію для середнього/медіани (64 дають похибку медіани ~0.5%% маси, середнього ~0.05%%)")
     ap.add_argument("--estimator", choices=list(FLOW_ESTIMATORS), default="median",
                     help="flow: оцінка за замовчуванням (калібрування будується для всіх трьох)")
     ap.add_argument("--print-every", dest="print_every", type=int, default=10,
@@ -497,15 +553,20 @@ def main():
            "loss_weights": args.loss_weights, "level": args.level, "dim": args.dim, "blocks": args.blocks,
            "lr": args.lr, "wd": args.wd, "batch": args.batch, "augment": args.augment,
            "flat": args.flat, "flat_max": args.flat_max, "seed": args.seed, "augment_z": args.augment_z,
+           "augment_swap": args.augment_swap, "jet_order": args.jet_order,
            "bound": args.bound, "train_frac": args.train_frac}
     if uses_extra({"inputs": args.inputs}) and args.level != "det":
         raise SystemExit("[E] додаткові входи (nn_extra) є лише на детекторному рівні")
     if args.bound and (args.model != "mlp" or args.target != "residual"):
         raise SystemExit("[E] --bound має сенс лише для MLP з --target residual (поправка до LKRv3, як у LKRnn)")
+    if args.model == "mlp" and args.arch != "res":
+        cfg.update(arch=args.arch, dropout=args.dropout)
     if args.model == "flow":
         cfg.update(ctx=args.ctx, transforms=args.transforms, flow_hidden=args.flow_hidden, bins=args.bins,
                    samples=args.samples, estimator=args.estimator, dropout=args.dropout)
     args.outdir = args.outdir or auto_outdir(cfg)
+    if os.path.exists(os.path.join(args.outdir, MODEL_FILE)) and not args.force:
+        raise SystemExit(f"[E] у {args.outdir} вже є модель — інша --outdir або --force для перезапису")
     os.makedirs(args.outdir, exist_ok=True)
     print(f"[I] папка моделі: {args.outdir}")
 
@@ -541,14 +602,15 @@ def main():
                           hidden=args.flow_hidden, bins=args.bins, samples=args.samples, dropout=args.dropout)
         model.estimator = args.estimator
     else:
-        model = StudyMLP(cfg["in_dim"], dim=args.dim, blocks=args.blocks, bound=args.bound)
+        model = StudyMLP(cfg["in_dim"], dim=args.dim, blocks=args.blocks, bound=args.bound,
+                         arch=args.arch, dropout=args.dropout if args.arch == "plain" else 0.0)
     with torch.no_grad():
         model.x_mean.copy_(torch.from_numpy(X[idx_tr].mean(0)))
         model.x_std.copy_(torch.from_numpy(X[idx_tr].std(0) + 1e-8))
         model.y_mean.copy_(torch.from_numpy(Y[idx_tr].mean(0)))
         model.y_std.copy_(torch.from_numpy(Y[idx_tr].std(0)))
     model.to(device)
-    print(f"[I] модель: {args.model.upper()} dim={args.dim}, blocks={args.blocks}"
+    print(f"[I] модель: {args.model.upper()}{' plain' if args.arch == 'plain' else ''} dim={args.dim}, blocks={args.blocks}"
           + (f", NSF: {args.transforms} перетворень, кондиціонер {args.flow_hidden}, контекст {args.ctx}, {args.bins} вузлів"
              if args.model == "flow" else "")
           + f", вхід {args.inputs} ({cfg['in_dim']}), ціль {args.target}, "
@@ -575,13 +637,14 @@ def main():
 
     def mass(pred_or_y, rows):
         """M у ГеВ з цілі чи прогнозу (для контролю σ(M) на валідації)."""
-        lm = pred_or_y[:, 0] if args.target == "direct" else pred_or_y[:, 0] + base_log_m[rows]
+        lm = pred_or_y[:, 0] if args.target != "residual" else pred_or_y[:, 0] + base_log_m[rows]
         return torch.exp(lm)
 
     opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=args.epochs, eta_min=args.lr * 1e-2)
     best, best_state, counter = float("inf"), None, 0
     rot_cols, flip_cols = augment_columns(args.inputs)
+    swap_perm = torch.tensor(swap_permutation(args.inputs, cfg["in_dim"]), device=device) if args.augment_swap else None
     t0 = time.time()
     for ep in range(1, args.epochs + 1):
         model.train()
@@ -597,6 +660,9 @@ def main():
                     px, py = xb[:, k].clone(), xb[:, k + 1].clone()
                     xb[:, k], xb[:, k + 1] = px * c - py * s, px * s + py * c
             yb = Yg[b]
+            if swap_perm is not None:                         # j₁ <-> j₂ (порядок jets не несе інформації)
+                sw = (torch.rand(len(b), device=device) < 0.5)[:, None]
+                xb = torch.where(sw, xb[:, swap_perm], xb)
             if args.augment_z:                                # z -> −z: pz усіх об'єктів і знак y
                 flip = (torch.rand(len(b), device=device) < 0.5)[:, None]
                 xb[:, flip_cols] = torch.where(flip, -xb[:, flip_cols], xb[:, flip_cols])
