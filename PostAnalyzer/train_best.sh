@@ -36,7 +36,7 @@ COMMON="--inputs raw_csv_mlj --augment-z --dim 128 --blocks 3 --lr 5e-4 --wd 1e-
 # Генераторний рівень: CSV немає, а порядок jets там збігається із зарядом b-кварків (j₁ = b̄, j₂ = b) —
 # мережа вивчила б правильні пари l–b як підказку, якої на детекторі немає. --jet-order pt прибирає її.
 GEN_COMMON="--inputs raw_mlj --level gen --jet-order pt --augment-z --dim 128 --blocks 3 --lr 5e-4 --wd 1e-2 \
-        --batch 4096 --epochs $EPOCHS --patience 40 --data $DATA"
+        --batch 4096 --epochs $EPOCHS --patience 40 --no-calibration --data $DATA"
 start=$(date +%s)
 
 for f in $DATA; do

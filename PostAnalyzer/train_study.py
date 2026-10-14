@@ -537,6 +537,8 @@ def main():
                     help="flow: вибірок на подію для середнього/медіани (64 дають похибку медіани ~0.5%% маси, середнього ~0.05%%)")
     ap.add_argument("--estimator", choices=list(FLOW_ESTIMATORS), default="median",
                     help="flow: оцінка за замовчуванням (калібрування будується для всіх трьох)")
+    ap.add_argument("--no-calibration", dest="no_calibration", action="store_true",
+                    help="не будувати калібрувальні криві (calibration*.json; для flow це найдовший крок)")
     ap.add_argument("--print-every", dest="print_every", type=int, default=10,
                     help="друкувати рядок кожні N епох (1 — щоепохи: видно, якщо тренування сповільнилось)")
     ap.add_argument("--train-frac", dest="train_frac", type=float, default=1.0,
@@ -715,6 +717,9 @@ def main():
     with open(os.path.join(args.outdir, "study_config.json"), "w") as f:
         json.dump({**cfg, "best_val": best, "train_seconds": round(time.time() - t0)}, f, indent=2)
     print(f"[I] найкраща val {best:.5f}; модель -> {os.path.join(args.outdir, MODEL_FILE)}")
+    if args.no_calibration:
+        print("[I] калібрування пропущено (--no-calibration)")
+        return
 
     if args.model == "flow":
         # Калібрування flow — окремим свіжим процесом: одного разу в тренувальному процесі після ~16 хв роботи
