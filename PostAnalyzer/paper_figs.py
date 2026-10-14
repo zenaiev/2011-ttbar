@@ -2,7 +2,7 @@
 paper_figs.py
 ─────────────
 Рисунки для статті: пара методів (LKR + один інший) на одній фігурі,
-3 рядки × 3 колонки — efficiency (upper), resolution (middle), bias (lower)
+3 рядки × 3 колонки — efficiency (upper), resolution (middle), bias (lower; пунктир — |bias| = середнє |reco − gen| у біні)
 для M(ttbar), pT(ttbar), y(ttbar).
 
 Уся фізика (бінінг, фільтри, похибки) береться з kinreco_eff_v4, щоб не дублювати реалізацію.
@@ -43,6 +43,7 @@ COLORS = {"lkr": "tab:blue", "lkrv2": "tab:red", "lkrv3": "tab:orange",
           "lkrnn": "tab:green", "fkr": "tab:purple", "skr": "tab:brown"}
 LINESTYLES = {}                     # метод -> стиль лінії (--linestyle); не суцільні — з порожніми маркерами
 LEGEND_TOP = False                  # --legend-top: одна спільна легенда над рисунком замість легенд у панелях
+NO_EFF = False                      # --no-eff: без рядка ефективності (лише роздільна здатність і bias)
 EXTRA_COLORS = ["tab:purple", "tab:brown", "tab:pink", "tab:olive", "tab:cyan", "tab:gray", "black"]
 
 
@@ -53,8 +54,11 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
     base_all = a["reco_passed_selection"] == 1 if level == "det" else np.ones(n, dtype=bool)
 
     eff_all = []          # ефективність з усіх панелей -> спільна вісь Y
-    fig, axes = plt.subplots(3, len(VARS), figsize=(13, height))
-    fig.subplots_adjust(left=0.08, right=0.98, top=0.93 if LEGEND_TOP else 0.95, bottom=0.07,
+    keys = ["res", "bias"] if NO_EFF else ["eff", "res", "bias"]
+    row_of = {k: i for i, k in enumerate(keys)}
+    fig, axes = plt.subplots(len(keys), len(VARS), figsize=(13, height * len(keys) / 3 if NO_EFF else height))
+    fig.subplots_adjust(left=0.08, right=0.98, top=(0.89 if NO_EFF else 0.93) if LEGEND_TOP else 0.95,
+                        bottom=0.1 if NO_EFF else 0.07,
                         wspace=0.28, hspace=0.28)
 
     for col, var in enumerate(VARS):
@@ -75,17 +79,27 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
                          linewidth=1.2, capsize=2, linestyle=ls)
             if ls != "-":
                 style["markerfacecolor"] = "white"
-            axes[0, col].errorbar(cx, eff,  eff_u,  **style)
-            axes[1, col].errorbar(cx, res,  res_u,  **style)
-            axes[2, col].errorbar(cx, bias, bias_u, **style)
+            if not NO_EFF:
+                axes[row_of["eff"], col].errorbar(cx, eff,  eff_u,  **style)
+            axes[row_of["res"], col].errorbar(cx, res,  res_u,  **style)
+            axes[row_of["bias"], col].errorbar(cx, bias, bias_u, **style)
+            m_abs = valid & np.isfinite(reco) & (res_mask if res_mask is not None else True)
+            j = np.digitize(gen[m_abs], k4.BINS[var]) - 1                  # |bias| = середнє |reco − gen| у біні
+            nb = len(k4.BINS[var]) - 1
+            ok = (j >= 0) & (j < nb)
+            cnt = np.bincount(j[ok], minlength=nb)
+            absb = np.bincount(j[ok], weights=np.abs(reco[m_abs] - gen[m_abs])[ok], minlength=nb) / np.maximum(cnt, 1)
+            absb = np.where(cnt > 0, absb, np.nan)
+            axes[row_of["bias"], col].plot(cx, absb[:len(cx)] if len(absb) >= len(cx) else absb, color=COLORS.get(m),
+                                           linewidth=1.1, linestyle="--")   # |bias| пунктиром
             span["eff"]  += [v for v in eff  if v == v]
             eff_all      += [v for v in eff  if v == v]
             span["res"]  += [v for v in res  if v == v]
-            span["bias"] += [v for v in bias if v == v]
+            span["bias"] += [v for v in bias if v == v] + [v for v in absb if v == v]
 
-        for row, (key, ylab) in enumerate([("eff", "Efficiency"),
-                                           ("res", "Resolution" + k4.UNITS[var]),
-                                           ("bias", "Bias" + k4.UNITS[var])]):
+        ylabs = {"eff": "Efficiency", "res": "Resolution" + k4.UNITS[var], "bias": "Bias" + k4.UNITS[var]}
+        for row, key in enumerate(keys):
+            ylab = ylabs[key]
             ax = axes[row, col]
             ax.set_xlabel(k4.LABELS[var], fontsize=11)
             ax.set_ylabel(ylab, fontsize=11)
@@ -94,6 +108,15 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
             ax.ticklabel_format(axis="y", useOffset=False)       # без «+1» / «1e-5+…» над віссю (ефективність ≈ 1)
             if col == 0 and not LEGEND_TOP:
                 ax.legend(fontsize=9)
+            if key == "bias" and col == 0:                       # пояснення до пунктиру (|bias|)
+                from matplotlib.lines import Line2D
+                handles = [Line2D([], [], color="#555555", marker="o", markersize=4, label="bias"),
+                           Line2D([], [], color="#555555", linestyle="--", label="|bias|")]
+                if LEGEND_TOP:
+                    ax.legend(handles=handles, fontsize=9, loc="lower left")
+                else:
+                    h, l = ax.get_legend_handles_labels()
+                    ax.legend(handles=h + handles[1:], fontsize=9)
             # масштаб за значеннями, не за (роздутими у хвостах) похибками
             vals = span[key]
             if key == "eff" and eff_min is not None:
@@ -105,7 +128,7 @@ def make_figure(a, methods, level, out_pdf, tag="", eff_min=None, height=9.5):
 
     # За замовчуванням (як на рисунках статті) вісь ефективності кожної панелі масштабується за її точками.
     # Якщо задано --eff-min, ефективність усіх панелей — на спільній осі [eff_min, 1.005].
-    if eff_all and eff_min is not None:
+    if eff_all and eff_min is not None and not NO_EFF:
         lo = eff_min
         for c in range(len(VARS)):
             axes[0, c].set_ylim(lo, 1.005)
@@ -158,6 +181,8 @@ def main():
                     help="свій підпис методу в легенді, напр. --label lkrnnfree='LKRnn без обмеження'; можна кілька разів")
     ap.add_argument("--color", action="append", default=[], metavar="МЕТОД=КОЛІР",
                     help="свій колір методу, напр. --color lkrnnmlpl1z='#e377c2'; можна кілька разів")
+    ap.add_argument("--no-eff", dest="no_eff", action="store_true",
+                    help="без рядка ефективності: лише роздільна здатність і bias")
     ap.add_argument("--legend-top", dest="legend_top", action="store_true",
                     help="одна спільна легенда над рисунком (не закриває кривих) замість легенд у панелях")
     ap.add_argument("--linestyle", action="append", default=[], metavar="МЕТОД=СТИЛЬ",
@@ -178,8 +203,9 @@ def main():
     for i, m in enumerate(study):
         COLORS.setdefault(m, EXTRA_COLORS[i % len(EXTRA_COLORS)])
     NICE.update(nn_split.method_labels(first) if first else {})     # короткі підписи, напр. "MLP (raw)"
-    global LEGEND_TOP
+    global LEGEND_TOP, NO_EFF
     LEGEND_TOP = args.legend_top
+    NO_EFF = args.no_eff
     for spec, target in ((args.label, NICE), (args.color, COLORS), (args.linestyle, LINESTYLES)):  # ручні мають перевагу
         for s in spec:
             k, sep, v = s.partition("=")

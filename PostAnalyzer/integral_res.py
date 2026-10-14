@@ -11,6 +11,9 @@ integral_res.py
   * ефективність LKRnn — на ВСЬОМУ датасеті: прапорець lkrnn збігається з lkrv3 в усіх подіях,
     тобто від ваг мережі не залежить.
 
+Інтегральний bias — середнє reco − gen; |Bias| — середнє |reco − gen| по подіях (зсуви різних знаків
+не гасять один одного).
+
 Режими (det–det / gen–gen / gen–det):
   python3 integral_res.py --input-pattern 'ttbar_output_det_{ch}.root'                      # det–det
   python3 integral_res.py --input-pattern 'ttbar_output_det_{ch}.root' --level gen          # gen–gen
@@ -85,6 +88,15 @@ def calc_metrics(reco, gen, valid, variable):
     return residual.mean(), residual.std(), n_ok
 
 
+def abs_bias(reco, gen, valid, variable):
+    """Bias по модулю: середнє |reco − gen| по подіях (зсуви різних знаків не гасять один одного)."""
+    valid = valid & physical(reco, variable)
+    residual = reco[valid] - gen[valid]
+    if variable in ANGULAR:
+        residual = wrap_angle(residual)
+    return float(np.mean(np.abs(residual))) if len(residual) else float("nan")
+
+
 def binned_metrics(reco, gen, base_valid, passed, variable, bins, res_mask=None):
     """Ефективність (%) і roзд. здатність у кожному біні gen.
     Ефективність — на base_valid; res_mask (LKRnn: події поза тренуванням NN) обмежує лише roзд. здатність.
@@ -131,7 +143,7 @@ def print_integral(a, level, methods, base, sample, refs=("lkr", "lkrv3"), label
     counts = []
     w = max([7] + [len(labels[m]) for m in methods])
     print(f"\n{SEP}\nІНТЕГРАЛЬНО (весь діапазон), {level.upper()}-рівень\n{SEP}")
-    print(f"{'Змінна':<8} | {'Метод':<{w}} | {'N знам.':<8} | {'Еф. (%)':<9} | {'Bias':<11} | {'Resolution':<11} | "
+    print(f"{'Змінна':<8} | {'Метод':<{w}} | {'N знам.':<8} | {'Еф. (%)':<9} | {'Bias':<11} | {'|Bias|':<11} | {'Resolution':<11} | "
           f"{'vs LKR':<9} | {'vs LKRv3':<9}")
     print(SEP)
     for variable in VARS:
@@ -145,11 +157,12 @@ def print_integral(a, level, methods, base, sample, refs=("lkr", "lkrv3"), label
             eff = 100.0 * int(valid.sum()) / n_den if n_den else float("nan")
             res_valid = method_base(valid, sample, m)            # bias/res LKRnn — лише поза тренуванням NN
             bias, res, n_ok = calc_metrics(a[f"{variable}_{m}{suffix}"], gen_arr, res_valid, variable)
+            abias = abs_bias(a[f"{variable}_{m}{suffix}"], gen_arr, res_valid, variable)
             res_by[m] = res
             counts.append((variable, m, n_ok, n_den))
             vs_lkr = improvement(res_by.get("lkr"), res) if m != "lkr" else "---"
             vs_v3 = improvement(res_by.get("lkrv3"), res) if m not in ("lkr", "lkrv2", "lkrv3") else "---"
-            print(f"{variable:<8} | {labels[m]:<{w}} | {n_den:<8} | {eff:<9.2f} | {bias:<11.4f} | {res:<11.4f} | "
+            print(f"{variable:<8} | {labels[m]:<{w}} | {n_den:<8} | {eff:<9.2f} | {bias:<11.4f} | {abias:<11.4f} | {res:<11.4f} | "
                   f"{vs_lkr:<9} | {vs_v3:<9}")
         print("-" * len(SEP))
     return counts
