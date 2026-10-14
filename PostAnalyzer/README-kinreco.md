@@ -45,7 +45,8 @@ python nn_apply.py --check 'ttbar_output_det_{ch}.root'                       # 
 ## Найкращі моделі: MLP, Flow і LKRnn unbounded
 
 Еталонні натреновані моделі лежать у репозиторії: `models/mlp`, `models/flow`, `models/lkrnn_unbound`
-(у кожній папці `study_model.pt`, `study_config.json`, `calibration*.json` і `dataset_split.root`).
+(у кожній папці `study_model.pt`, `study_config.json`, `calibration*.json` і `dataset_split.root`), а також
+моделі генераторного рівня `models/mlp_gen`, `models/flow_gen` (raw_mlj, `--jet-order pt`, без калібрування).
 Перетренування пише в `models/retrained/`, тож еталон не перетирається; крім того, `train_study.py`
 відмовляється писати в папку, де вже є модель (перезапис — лише з `--force`).
 

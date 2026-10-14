@@ -1,0 +1,29 @@
+{
+  "model": "mlp",
+  "inputs": "raw_mlj",
+  "target": "direct",
+  "loss": "l1",
+  "loss_weights": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "level": "gen",
+  "dim": 128,
+  "blocks": 3,
+  "lr": 0.0005,
+  "wd": 0.01,
+  "batch": 4096,
+  "augment": true,
+  "flat": [],
+  "flat_max": 30.0,
+  "seed": 42,
+  "augment_z": true,
+  "augment_swap": false,
+  "jet_order": "pt",
+  "bound": null,
+  "train_frac": 1.0,
+  "in_dim": 22,
+  "best_val": 0.16547366976737976,
+  "train_seconds": 458
+}
